@@ -65,7 +65,6 @@ def fetch_single_project_metrics(sonar_token, project_key, log_list):
     
     metric_keys_to_fetch = [
         "coverage",
-        # "coverage_rating", # Get A-E rating for coverage directly from SonarCloud
         "bugs",
         "reliability_rating",
         "vulnerabilities",
@@ -107,9 +106,7 @@ def fetch_single_project_metrics(sonar_token, project_key, log_list):
         "Security Rating (A-E)": RATING_MAP.get(metrics_map.get("security_rating", "N/A"), "N/A"),
         "Maintainability Rating (A-E)": RATING_MAP.get(metrics_map.get("sqale_rating", "N/A"), "N/A"),
         "Security Hotspot Rating (A-E)": RATING_MAP.get(metrics_map.get("security_review_rating", "N/A"), "N/A"),
-        
-        # Coverage with A-E rating appended (e.g., "75.5A")
-        # "coverage_with_rating": f"{metrics_map.get('coverage', 'N/A')}{RATING_MAP.get(metrics_map.get('coverage_rating', 'N/A'), '')}"
+
     }
     # log_list.append(f"[INFO] Sonar: Metrics processed for '{project_key}'.")
     return processed_metrics

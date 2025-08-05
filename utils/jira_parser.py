@@ -38,174 +38,365 @@ def get_all_jira_users_streamlit(jira_url, jira_username, jira_api_token, log_li
     max_results = 50 
 
     while True:
-        try:
-            users_page = jira_instance.search_users(query='*', startAt=start_at, maxResults=max_results)
-            if not users_page: break
-            
-            for user in users_page:
-                is_human = True
-                if hasattr(user, 'accountType') and user.accountType.lower() != 'atlassian':
-                    is_human = False 
-                
-                if is_human:
-                    display_name_lower = user.displayName.lower() if hasattr(user, 'displayName') else ''
-                    email_lower = user.emailAddress.lower() if hasattr(user, 'emailAddress') else ''
-                    NON_HUMAN_KEYWORDS = ['[app]', 'automation', 'bot', 'service', 'plugin', 'jira-system', 'addon', 'connect', 'integration', 'github', 'slack', 'webhook', 'migrator', 'system', 'importer', 'syncer']
-                    for keyword in NON_HUMAN_KEYWORDS:
-                        if keyword in display_name_lower or keyword in email_lower:
-                            is_human = False
-                            break
-
-                is_matching_domain = True
-                if filter_domain:
-                    if not email_lower or not email_lower.endswith(f"@{filter_domain.lower()}"): 
-                        is_matching_domain = False
-
-                if is_human and is_matching_domain:
-                    all_users[user.accountId] = {
-                        'displayName': user.displayName if hasattr(user, 'displayName') else user.accountId,
-                        'emailAddress': user.emailAddress if hasattr(user, 'emailAddress') else 'N/A'
-                    }
-            start_at += max_results
-            if len(users_page) < max_results: break 
-        except JIRAError as e:
-            log_list.append(f"[ERROR] JIRA Users: Error fetching users: Status {e.status_code} - {e.text}")
+        users_page = fetch_users_page(jira_instance, start_at, max_results, log_list)
+        if not users_page:
             break
-        except Exception as e:
-            log_list.append(f"[ERROR] JIRA Users: An unexpected error occurred while fetching users: {e}")
+        process_users_page(users_page, all_users, filter_domain, log_list)
+        start_at += max_results
+        if len(users_page) < max_results:
             break
-    
-    filter_status_message = ""
-    if filter_domain:
-        filter_status_message = f" (filtered by domain '{filter_domain}')"
-    
-    log_list.append(f"[INFO] JIRA Users: Fetched {len(all_users)} active human Jira users{filter_status_message}.")
+
+    log_list.append(f"[INFO] JIRA Users: Fetched {len(all_users)} active human Jira users{get_filter_status_message(filter_domain)}.")
     return all_users
+
+
+def fetch_users_page(jira_instance, start_at, max_results, log_list):
+    try:
+        return jira_instance.search_users(query='*', startAt=start_at, maxResults=max_results)
+    except JIRAError as e:
+        log_list.append(f"[ERROR] JIRA Users: Error fetching users: Status {e.status_code} - {e.text}")
+    except Exception as e:
+        log_list.append("[ERROR] JIRA Users: An unexpected error occurred while fetching users.")
+    return None
+
+
+def process_users_page(users_page, all_users, filter_domain, log_list):
+    for user in users_page:
+        if is_human_user(user) and is_matching_domain(user, filter_domain):
+            all_users[user.accountId] = {
+                'displayName': user.displayName if hasattr(user, 'displayName') else user.accountId,
+                'emailAddress': user.emailAddress if hasattr(user, 'emailAddress') else 'N/A'
+            }
+
+
+def is_human_user(user):
+    if hasattr(user, 'accountType') and user.accountType.lower() != 'atlassian':
+        return False
+    display_name_lower = user.displayName.lower() if hasattr(user, 'displayName') else ''
+    email_lower = user.emailAddress.lower() if hasattr(user, 'emailAddress') else ''
+    NON_HUMAN_KEYWORDS = ['[app]', 'automation', 'bot', 'service', 'plugin', 'jira-system', 'addon', 'connect', 'integration', 'github', 'slack', 'webhook', 'migrator', 'system', 'importer', 'syncer']
+    return not any(keyword in display_name_lower or keyword in email_lower for keyword in NON_HUMAN_KEYWORDS)
+
+
+def is_matching_domain(user, filter_domain):
+    if not filter_domain:
+        return True
+    email_lower = user.emailAddress.lower() if hasattr(user, 'emailAddress') else ''
+    return email_lower.endswith(f"@{filter_domain.lower()}")
+
+
+def get_filter_status_message(filter_domain):
+    return f" (filtered by domain '{filter_domain}')" if filter_domain else ""
+
+def count_comments(changelog_histories):
+    if not isinstance(changelog_histories, list):
+        return 0
+
+    count = 0
+    for history in changelog_histories:
+        if not isinstance(history, dict):
+            continue
+
+        items = history.get('items', [])
+        if not isinstance(items, list):
+            # Skip if 'items' is not iterable (e.g., int, None, etc.)
+            continue
+
+        for item in items:
+            if isinstance(item, dict) and str(item.get('field', '')).lower() == 'comment':
+                count += 1
+
+    return count
+
+def count_comments_from_fields(issue, log_list=None):
+    try:
+        # Ensure issue is a dictionary
+        if not isinstance(issue, dict):
+            if log_list:
+                log_list.append(f"[WARN] Invalid issue type: {type(issue)}")
+            return 0
+
+        fields = issue.get("fields", {})
+        if not isinstance(fields, dict):
+            if log_list:
+                log_list.append(f"[WARN] Invalid fields type: {type(fields)}")
+            return 0
+
+        comment_obj = fields.get("comment", {})
+        if not isinstance(comment_obj, dict):
+            if log_list:
+                log_list.append(f"[WARN] Invalid comment type: {type(comment_obj)}")
+            return 0
+
+        comments = comment_obj.get("comments", [])
+        if not isinstance(comments, list):
+            if log_list:
+                log_list.append(f"[WARN] Invalid comments type: {type(comments)}")
+            return 0
+
+        return len(comments)
+
+    except Exception as e:
+        if log_list:
+            log_list.append(f"[ERROR] Failed to count comments: {e}")
+        return 0
+
+def count_transitions(changelog_histories, from_status, to_status, log_list):
+    count = 0
+    try:
+        for history in changelog_histories:
+            for item in history.get('items', []):
+                if item.get('field') == 'status':
+                    from_str = item.get('fromString', '')
+                    to_str = item.get('toString', '')
+                    if from_str.lower() == from_status.lower() and to_str.lower() == to_status.lower():
+                        count += 1
+    except Exception as e:
+        log_list.append(f"[ERROR] Exception while counting transitions from '{from_status}' to '{to_status}': {e}")
+    return count
+
+
+def seconds_to_dhm(seconds):
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    return f"{days} days {hours} hrs {minutes} mins"
+
+def seconds_to_hm(seconds_str):
+    try:
+        seconds = int(seconds_str)
+    except (ValueError, TypeError):
+        return "Invalid input"
+
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    return f"{hours} hrs {minutes} mins"
+
+def get_logged_time(histories, log_list, developer_account_id=None):
+    total_logged_time = 0
+    # print(f"developer_account_id = {developer_account_id}")
+    for history in histories:
+        author = history.get("author", {})
+        account_id = author.get("accountId")
+
+        for item in history.get("items", []):
+            if item.get("field") == "timespent":
+                try:
+                    to_seconds = int(item.get("to", 0))
+
+                    if developer_account_id:
+                        # Only accumulate time if author matches the developer
+                        if account_id == developer_account_id:
+                            total_logged_time = to_seconds
+                    else:
+                        # Return first available timespent regardless of author
+                        return to_seconds
+
+                except (TypeError, ValueError):
+                    continue  # skip invalid values
+
+    return total_logged_time if developer_account_id else 0
+
+# def get_logged_time(histories, developer_account_id=None):
+#     logged_time = 0
+
+#     if developer_account_id:
+#         for history in histories:
+#             # print(f"history = {history}")
+
+#             # below is the history data, retrieve the 'To' value for the author.
+#             # history = {'id': '597620', 'author': {'self': 'https://truxinc.atlassian.net/rest/api/3/user?accountId=712020%3Ac274c6c5-5313-42db-952f-8b4181f0dbbd', 'accountId': '712020:c274c6c5-5313-42db-952f-8b4181f0dbbd', 'avatarUrls': {'48x48': 'https://secure.gravatar.com/avatar/910bf6c3e5809ce405991f2d17ec7aa5?d=https%3A%2F%2Favatar-management--avatars.us-west-2.prod.public.atl-paas.net%2Finitials%2FSB-0.png', '24x24': 'https://secure.gravatar.com/avatar/910bf6c3e5809ce405991f2d17ec7aa5?d=https%3A%2F%2Favatar-management--avatars.us-west-2.prod.public.atl-paas.net%2Finitials%2FSB-0.png', '16x16': 'https://secure.gravatar.com/avatar/910bf6c3e5809ce405991f2d17ec7aa5?d=https%3A%2F%2Favatar-management--avatars.us-west-2.prod.public.atl-paas.net%2Finitials%2FSB-0.png', '32x32': 'https://secure.gravatar.com/avatar/910bf6c3e5809ce405991f2d17ec7aa5?d=https%3A%2F%2Favatar-management--avatars.us-west-2.prod.public.atl-paas.net%2Finitials%2FSB-0.png'}, 'displayName': 'Suraj Bandgar', 'active': True, 'timeZone': 'America/New_York', 'accountType': 'atlassian'}, 'created': '2025-07-24T01:57:01.438-0400', 'items': [{'field': 'description', 'fieldtype': 'jira', 'fieldId': 'description', 'from': None, 'fromString': 'Change name of Estimate Start time --> Estimate Origin Arrival time ', 'to': None, 'toString': "*Issue :* \n\nThe wording used for drivers estimated time of arrival at a load’s origin location was used as _Estimate Start Time._  We have another event of similar wording “Start Time” of load which defines when a load was started by the driver. Even though these two parameter's names are similar to each other but their is a difference in the occurrence of these events when it comes to subsequent loads. .\n\nFor example, for the 1st load of the day or similar, the Punch in event i.e. Start load event = Estimated start time would be occurring at the same time. However when it comes to start load event of subsequent load, the load would be started at previous loads destinations while the Estimated start time would show time of estimated arrival of the driver at that load’s origin location. \n\n*Expected behavior :*  \n\nThe nomenclature used for arrival time should be changed from Estimated Start time to Estimated Origin Arrival time"}]}
+            
+#             for item in history.get('items', []):
+                
+#                 if item.get('author', {}).get('accountId') == developer_account_id:
+#                     # try:
+#                     #     print(f"item = {item}")
+#                     #     logged_time = int(item.get('author', {}).get('to'))
+#                     #     break
+#                     # except (ValueError, TypeError):
+#                     #     return 0  # fallback if conversion fails
+#                     print(f"item = \n{item}")
+#                     if item.get('field') == 'timespent':
+#                         try:
+#                             logged_time = int(item['to'])
+#                             break
+#                         except (ValueError, TypeError):
+#                             return 0
+#     else:
+#         latest_history = histories[0] if histories else None
+
+#         if not latest_history:
+#             return 0  # safe fallback
+
+#         for item in latest_history.get('items', []):
+#             if item.get('field') == 'timespent':
+#                 try:
+#                     logged_time = int(item['to'])
+#                 except (ValueError, TypeError):
+#                     return 0
+
+#     return logged_time
+
+# def get_logged_time(histories, developer_account_id=None):
+#     logged_time = 0
+#     latest_history = histories[0] if histories else None
+
+#     if not latest_history:
+#         return 0  # safe fallback
+
+#     for item in latest_history.get('items', []):
+#         # print(f"developer_account_id = {developer_account_id}...")  # Debugging line
+#         if developer_account_id:
+#             print(f"item = {item}...")  # Debugging line")
+#             if item.get('field') == 'timespent' and item.get('author', {}).get('accountId') == developer_account_id:
+#                 try:
+                    
+#                     logged_time = int(item.get('author', {}).get('to'))
+#                 except (ValueError, TypeError):
+#                     return 0 # fallback if conversion fails
+#         else:
+#             if item.get('field') == 'timespent':
+#                 try:
+#                     logged_time = int(item['to'])
+#                 except (ValueError, TypeError):
+#                     return 0
+#         # if item.get('field') == 'timespent':
+#         #     try:
+#         #         logged_time = int(item['to'])
+#         #     except (ValueError, TypeError):
+#         #         return 0  # fallback if conversion fails
+#             # break
+
+#     return logged_time
 
 
 # --- Helper function to process a list of issues and extract metrics ---
 # MODIFIED: Added 'headers' parameter
-def _process_jira_issues(issues, sprint_id, log_list, headers):
-    story_points = 0
-    tickets_closed = 0
-    bugs_closed = 0
-    comments_count_per_ticket = []
-    lead_times = []
-    cycle_times = []
-    dev_branches = set() # Use a set to store unique branch names
+def _process_jira_issues(issues, sprint_id, log_list, headers, developer_account_id=None):
+    metrics = initialize_metrics()
 
     for issue in issues:
-        fields = issue["fields"]
-        changelog = issue.get("changelog", {}).get("histories", [])
-        issue_key = issue.get("key", "N/A") 
-        issue_type = fields.get("issuetype", {}).get("name", "").lower()
-        status = fields.get("status", {}).get("name", "").lower()
-        created = fields.get("created")
-        comments_count_per_ticket.append(len(fields.get("comment", {}).get("comments", [])))
+        if sprint_id and not _filter_issues_by_sprint(issue, sprint_id):
+            continue
+        _update_metrics(issue, metrics, headers, log_list, developer_account_id)
 
-        # Filter by sprint_id if provided and not empty
-        is_in_sprint = False
-        if sprint_id: 
-            issue_sprints = fields.get("customfield_10010", []) 
-            if isinstance(issue_sprints, list):
-                for s in issue_sprints:
-                    if isinstance(s, dict):
-                        if sprint_id.lower() in str(s.get('name', '')).lower() or \
-                           sprint_id == str(s.get('id', '')): 
-                            is_in_sprint = True
-                            break
-                    elif isinstance(s, str): 
-                        if sprint_id.lower() in s.lower():
-                            is_in_sprint = True
-                            break
-            elif isinstance(issue_sprints, str): 
-                if sprint_id.lower() in issue_sprints.lower():
-                    is_in_sprint = True
-            
-            if not is_in_sprint: 
-                # log_list.append(f"[DEBUG] JIRA: Skipping issue {issue_key} (not in sprint '{sprint_id}').")
-                continue 
-        else: 
-            is_in_sprint = True
+    return summarize_metrics(metrics, issues)
 
-        log_list.append(f"[INFO] JIRA: Processing issue {issue_key} (status: {status}, in_sprint: {is_in_sprint})")
 
-        # Development panel (linked repos/branches)
-        dev_panel_url = f"{JIRA_URL}/rest/dev-status/1.0/issue/detail"
-        dev_panel_params = {"issueId": issue["id"], "applicationType": "GitHub", "dataType": "repository"}
-        try:
-            # MODIFIED: Pass 'headers' to requests.get
-            dev_resp = requests.get(dev_panel_url, headers=headers, params=dev_panel_params)
-            dev_resp.raise_for_status()
-            dev_data = dev_resp.json()
-            
-            detail = dev_data.get("detail", [])
-            if detail:
-                repos_in_dev_panel = detail[0].get("repositories", [])
-                if repos_in_dev_panel:
-                    log_list.append(f"[DEBUG] JIRA Dev Panel for {issue_key}: Found {len(repos_in_dev_panel)} repositories.")
-                    for repo_entry in repos_in_dev_panel:
-                        repo_name_from_jira = repo_entry.get("name")
-                        if repo_name_from_jira:
-                            dev_branches.add(repo_name_from_jira)
-                            log_list.append(f"[DEBUG] JIRA Dev Panel: Added repo '{repo_name_from_jira}' from name for {issue_key}.")
-                        elif repo_entry.get("url"): 
-                            try:
-                                url_path = repo_entry['url'].replace('https://github.com/', '').strip('/')
-                                if '/' in url_path:
-                                    dev_branches.add(url_path)
-                                    log_list.append(f"[DEBUG] JIRA Dev Panel: Added repo '{url_path}' from URL for {issue_key}.")
-                            except Exception as parse_e:
-                                log_list.append(f"[WARNING] JIRA Dev Panel: Could not parse repo name from URL '{repo_entry.get('url')}' for {issue_key}: {parse_e}")
-                else:
-                    log_list.append(f"[DEBUG] JIRA Dev Panel for {issue_key}: 'repositories' list is empty or not found in detail.")
-            else:
-                log_list.append(f"[DEBUG] JIRA Dev Panel for {issue_key}: 'detail' is empty or not found.")
+def _filter_issues_by_sprint(issue, sprint_id):
+    issue_sprints = issue.get("fields", {}).get("customfield_10010", [])
+    return any(
+        sprint_id.lower() in str(s.get("name", "")).lower() or sprint_id == str(s.get("id", ""))
+        for s in issue_sprints if isinstance(s, dict)
+    ) if isinstance(issue_sprints, list) else sprint_id.lower() in issue_sprints.lower()
 
-        except requests.exceptions.RequestException as e:
-            log_list.append(f"[WARNING] JIRA Dev Panel API Error for issue {issue_key}: {e}")
-        
-        story_points += fields.get("customfield_10014") or 0
 
-        if status in ["done", "released", "closed"]:
-            tickets_closed += 1
-            if issue_type == "bug":
-                bugs_closed += 1
+def _update_metrics(issue, metrics, headers, log_list, developer_account_id=None):
+    changelog = issue.get("changelog", {}).get("histories", [])
 
-        in_progress_date = None
-        done_date = None
+    # print("[DEBUG] issue type:", type(issue))
+    # print("[DEBUG] issue content:", issue)
+    # metrics["comments_count"] += count_comments_from_fields(issue, log_list)
+    metrics["failed_qa_count"] += count_transitions(changelog, "In Testing", "Rejected", log_list)
+    metrics["logged_time"] += get_logged_time(changelog, log_list, developer_account_id)
+    _process_dev_panel(issue, headers, log_list, metrics["dev_branches"])
 
-        for entry in changelog:
-            for item in entry["items"]:
-                if item["field"] == "status":
-                    to_status = item["toString"].lower()
-                    if to_status == "in progress" and not in_progress_date:
-                        in_progress_date = entry["created"]
-                    elif to_status in ["done", "released", "closed"] and not done_date:
-                        done_date = entry["created"]
-            
-        if in_progress_date and done_date:
-            try:
-                delta = (parser.isoparse(done_date) - parser.isoparse(in_progress_date)).days
-                if delta >= 0: cycle_times.append(delta)
-            except ValueError as ve:
-                log_list.append(f"[WARNING] JIRA: Could not parse cycle time dates for {issue_key}: {ve}")
-        if created and done_date:
-            try:
-                delta = (parser.isoparse(done_date) - parser.isoparse(created)).days
-                if delta >= 0: lead_times.append(delta)
-            except ValueError as ve:
-                log_list.append(f"[WARNING] JIRA: Could not parse lead time dates for {issue_key}: {ve}")
+    value = issue.get("fields", {}).get("customfield_10014")
+    try:
+        metrics["story_points"] += float(value)
+    except (TypeError, ValueError):
+        metrics["story_points"] += 0.0
 
+    _update_closure_metrics(issue, metrics)
+    in_progress_date, done_date = _calculate_times(changelog)
+    _update_time_metrics(issue, metrics, in_progress_date, done_date)
+
+
+def _process_dev_panel(issue, headers, log_list, dev_branches):
+    dev_panel_url = f"{JIRA_URL}/rest/dev-status/1.0/issue/detail"
+    dev_panel_params = {"issueId": issue["id"], "applicationType": "GitHub", "dataType": "repository"}
+    try:
+        dev_resp = requests.get(dev_panel_url, headers=headers, params=dev_panel_params)
+        dev_resp.raise_for_status()
+        dev_data = dev_resp.json()
+        _extract_repositories(dev_data, dev_branches)
+    except requests.exceptions.RequestException as e:
+        log_list.append(f"[WARNING] JIRA Dev Panel API Error: {e}")
+
+
+def _extract_repositories(dev_data, dev_branches):
+    details = dev_data.get("detail", [])
+    
+    if not details or not isinstance(details, list):
+        return  # or log a warning if needed
+
+    first_detail = details[0]
+    if not isinstance(first_detail, dict):
+        return  # defensive check
+
+    for repo_entry in first_detail.get("repositories", []):
+        repo_name = repo_entry.get("name") or repo_entry.get("url", "").replace("https://github.com/", "").strip("/")
+        if repo_name:
+            dev_branches.add(repo_name)
+
+
+def _calculate_times(changelog):
+    in_progress_date, done_date = None, None
+    for entry in changelog:
+        for item in entry["items"]:
+            if item["field"] == "status":
+                in_progress_date, done_date = _update_status_dates(item, entry, in_progress_date, done_date)
+    return in_progress_date, done_date
+
+
+def _update_status_dates(item, entry, in_progress_date, done_date):
+    to_status = item["toString"].lower()
+    if to_status == "in progress" and not in_progress_date:
+        in_progress_date = entry["created"]
+    elif to_status in ["qa complete", "done", "released", "closed"] and not done_date:
+        done_date = entry["created"]
+    return in_progress_date, done_date
+
+def _update_closure_metrics(issue, metrics):
+    fields = issue.get("fields", {})
+    status = fields.get("status", {}).get("name", "").lower()
+    issue_type = fields.get("issuetype", {}).get("name", "").lower()
+
+    if status in ["qa complete", "done", "released", "closed"]:
+        if issue_type == "bug":
+            metrics["bugs_closed"] += 1
+        else:
+            metrics["tickets_closed"] += 1
+
+
+def _update_time_metrics(issue, metrics, in_progress_date, done_date):
+    if in_progress_date and done_date:
+        metrics["cycle_times"].append((parser.isoparse(done_date) - parser.isoparse(in_progress_date)).days)
+    if issue.get("fields", {}).get("created") and done_date:
+        metrics["lead_times"].append((parser.isoparse(done_date) - parser.isoparse(issue["fields"]["created"])).days)
+
+
+def initialize_metrics():
+    return {
+        "story_points": 0, "tickets_closed": 0, "bugs_closed": 0, 
+        # "comments_count": [],
+        "lead_times": [], "cycle_times": [], "dev_branches": set(), "failed_qa_count": 0, "logged_time": 0
+    }
+
+
+def summarize_metrics(metrics, issues):
     return {
         "all_issues_count": len(issues),
-        "story_points_done": story_points, 
-        "tickets_closed": tickets_closed,
-        "bugs_closed": bugs_closed,
-        "avg_comments": round(statistics.mean(comments_count_per_ticket), 2) if comments_count_per_ticket else 0,
-        "avg_lead_time": round(statistics.mean(lead_times), 2) if lead_times else "N/A",
-        "avg_cycle_time": round(statistics.mean(cycle_times), 2) if cycle_times else "N/A",
-        "dev_branches": list(dev_branches),
+        "story_points_done": metrics["story_points"],
+        "tickets_closed": metrics["tickets_closed"],
+        "bugs_closed": metrics["bugs_closed"],
+        # "avg_comments": round(statistics.mean(metrics["comments_count"]), 2) if metrics["comments_count"] else 0,
+        "avg_lead_time": round(statistics.mean(metrics["lead_times"]), 2) if metrics["lead_times"] else "N/A",
+        "avg_cycle_time": round(statistics.mean(metrics["cycle_times"]), 2) if metrics["cycle_times"] else "N/A",
+        "dev_branches": list(metrics["dev_branches"]),
+        "failed_qa_count": metrics["failed_qa_count"],
+        "logged_time": metrics["logged_time"],
     }
 
 
@@ -256,8 +447,31 @@ def fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id
         log_list.append("[WARNING] JIRA: No issues found for the specified individual developer/team/sprint combination.")
         return {"error": "No issues found for individual developer/team/sprint.", "dev_branches": []}
 
+    # get developer account ID
+    url = f"{JIRA_URL}/rest/api/3/user/search?query={developer_name.lower()}"
+    developer_account_id = None
+    try:
+        account_response = requests.get(url, headers=headers)
+        account_response.raise_for_status() 
+        users = account_response.json()
+        for user in users:
+            developer_account_id = user.get("accountId")
+            if developer_account_id:
+                break
+
+        if not developer_account_id:
+            log_list.append(f"[WARNING] JIRA: Developer '{developer_name}' not found in JIRA.")
+            return {"error": f"Developer '{developer_name}' not found in JIRA.", "dev_branches": []}
+    
+        log_list.append(f"[INFO] JIRA API: GET {url} - Status: {response.status_code} - Account Id: {developer_account_id}")
+    except requests.exceptions.RequestException as e:
+        log_list.append(f"[ERROR] JIRA API Request Error: {e}")
+        return {"error": f"JIRA API failed: {e}"}
+
+    # print(f"developer_account_id 222 = {developer_account_id}...")  # Debugging line
+
     # MODIFIED: Pass 'headers' to _process_jira_issues
-    return _process_jira_issues(issues, sprint_id, log_list, headers)
+    return _process_jira_issues(issues, sprint_id, log_list, headers, developer_account_id)
 
 
 # --- New: Function to fetch JIRA metrics for a Team ---

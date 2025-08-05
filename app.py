@@ -54,6 +54,7 @@ if 'git_metrics_individual' not in st.session_state: st.session_state.git_metric
 if 'sonar_all_projects_data_individual' not in st.session_state: st.session_state.sonar_all_projects_data_individual = [] # Individual metrics
 if 'sonar_errors_individual' not in st.session_state: st.session_state.sonar_errors_individual = [] # Individual metrics
 if 'sonar_key_map_global' not in st.session_state: st.session_state.sonar_key_map_global = {}
+if 'all_projects' not in st.session_state: st.session_state.all_projects = {}
 
 # NEW: Team-level metrics storage
 if 'jira_result_team' not in st.session_state: st.session_state.jira_result_team = {}
@@ -178,391 +179,215 @@ with st.sidebar:
 
 
 # --- Function to fetch all metrics (orchestrates calls to utility modules) ---
-def _fetch_all_metrics(jira_email, jira_token, github_token, sonar_token, sonar_org, developer_name_ui, sprint_id_ui, team_name_ui, team_id_ui, log_list):
-    """Orchestrates fetching metrics for both individual and team."""
-    
-    # Individual metrics
-    jira_result_individual = {"error": "Not fetched"}
-    git_metrics_individual = {"error": "Not fetched"}
-    sonar_all_projects_data_individual = []
-    sonar_errors_individual = []
-    team_sonar_errors = []
-
-    # Team metrics
-    jira_result_team = {"error": "Not fetched"}
-    git_metrics_team = {"error": "Not fetched"}
-    sonar_metrics_team = []
-
-    dev_repos_from_jira_individual = [] 
-
-    try:
-        # --- Fetch INDIVIDUAL JIRA Metrics ---
-        if developer_name_ui and developer_name_ui != "--- Select a Developer ---":
-            add_log_message(log_list, "info", f"Initiating INDIVIDUAL JIRA metrics fetch for developer '{developer_name_ui}' in sprint '{sprint_id_ui}'...")
-            jira_result_individual = fetch_jira_metrics_via_api(
-                jira_email, jira_token, developer_name_ui, 
-                sprint_id=sprint_id_ui, 
-                team_name=team_name_ui, 
-                log_list=log_list
-            )
-            if "error" in jira_result_individual:
-                add_log_message(log_list, "error", f"INDIVIDUAL JIRA Error: {jira_result_individual['error']}")
-                dev_repos_from_jira_individual = [] 
-            else:
-                dev_repos_from_jira_individual = jira_result_individual.get("dev_branches", [])
-        else:
-            add_log_message(log_list, "warning", "No individual developer selected. Skipping individual JIRA metrics fetch.")
-            jira_result_individual = {"error": "No developer selected."}
+# def _fetch_all_metrics(jira_email, jira_token, github_token, sonar_token, sonar_org, developer_name_ui, sprint_id_ui, team_name_ui, team_id_ui, log_list):
+#     """Orchestrates fetching metrics for both individual and team."""
+#     jira_result_individual, dev_repos_from_jira_individual = _fetch_individual_jira_metrics(
+#         jira_email, jira_token, developer_name_ui, sprint_id_ui, team_name_ui, log_list
+#     )
+#     jira_result_team, dev_repos_from_jira_team = _fetch_team_jira_metrics(
+#         jira_email, jira_token, team_id_ui, team_name_ui, sprint_id_ui, log_list
+#     )
+#     git_metrics_individual = _fetch_individual_git_metrics(
+#         github_token, developer_name_ui, dev_repos_from_jira_individual, sonar_org, sprint_id_ui, log_list
+#     )
+#     git_metrics_team = _fetch_team_git_metrics(
+#         github_token, dev_repos_from_jira_team, sonar_org, sprint_id_ui, log_list
+#     )
+#     sonar_all_projects_data_individual, sonar_errors_individual = _fetch_individual_sonar_metrics(
+#         sonar_token, sonar_org, dev_repos_from_jira_individual, log_list
+#     )
+#     sonar_metrics_team, team_sonar_errors = _fetch_team_sonar_metrics(
+#         sonar_token, sonar_org, dev_repos_from_jira_team, log_list
+#     )
+#     return (
+#         jira_result_individual, git_metrics_individual, sonar_all_projects_data_individual, sonar_errors_individual,
+#         jira_result_team, git_metrics_team, sonar_metrics_team, team_sonar_errors
+#     )
 
 
-        # --- Fetch TEAM JIRA Metrics ---
-        if team_id_ui:
-            add_log_message(log_list, "info", f"Initiating TEAM JIRA metrics fetch for team '{team_name_ui}' in sprint '{sprint_id_ui}'...")
-            jira_result_team = fetch_jira_metrics_for_team(
-                jira_email, jira_token, team_id_ui, team_name_ui,
-                sprint_id=sprint_id_ui,
-                log_list=log_list
-            )
-            if "error" in jira_result_team:
-                add_log_message(log_list, "error", f"TEAM JIRA Error: {jira_result_team['error']}")
-                dev_repos_from_jira_team = [] 
-            else:
-                dev_repos_from_jira_team = jira_result_team.get("dev_branches", [])
-            
-        else:
-            add_log_message(log_list, "warning", "No team selected. Skipping team JIRA metrics fetch.")
-            jira_result_team = {"error": "No team selected."}
+def _fetch_all_metrics(
+    jira_email, jira_token, github_token, sonar_token, sonar_org,
+    developer_name_ui, sprint_id_ui, team_name_ui, team_id_ui, log_list
+):
+    results = {}
 
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            "jira_ind": executor.submit(_fetch_individual_jira_metrics, jira_email, jira_token, developer_name_ui, sprint_id_ui, team_name_ui, log_list),
+            "jira_team": executor.submit(_fetch_team_jira_metrics, jira_email, jira_token, team_id_ui, team_name_ui, sprint_id_ui, log_list),
+        }
 
-        # --- Fetch INDIVIDUAL Git Metrics ---
-        if developer_name_ui and developer_name_ui != "--- Select a Developer ---":
-            add_log_message(log_list, "info", "Initiating INDIVIDUAL Git metrics fetch...")
-            git_metrics_individual = fetch_git_metrics_via_api(
-                github_token, developer_name_ui, dev_repos_from_jira_individual, 
-                log_list=log_list,
-                github_org_key=sonar_org,
-                sprint_id=sprint_id_ui
-            )
-            if "error" in git_metrics_individual:
-                add_log_message(log_list, "error", f"INDIVIDUAL Git Error: {git_metrics_individual['error']}")
-        else:
-            add_log_message(log_list, "warning", "No individual developer selected. Skipping individual Git metrics fetch.")
-            git_metrics_individual = {"error": "No developer selected."}
+        # Wait for JIRA futures first (required to get repo lists for Git/Sonar)
+        results["jira_ind"], dev_repos_from_jira_individual = futures["jira_ind"].result()
+        results["jira_team"], dev_repos_from_jira_team = futures["jira_team"].result()
 
-        # --- Fetch TEAM Git Metrics (Placeholder) ---
-        # add_log_message(log_list, "warning", "TEAM Git metrics aggregation is not fully implemented. This is a placeholder.")
-        # git_metrics_team = {"error": "Team Git aggregation not implemented."}
-        if team_id_ui:
-            add_log_message(log_list, "info", f"Initiating TEAM Git metrics fetch for team '{team_name_ui}' in sprint '{sprint_id_ui}'...")
-            git_metrics_team = fetch_git_metrics_via_api(
-                github_token, developer_name_ui, dev_repos_from_jira_team, 
-                log_list=log_list,
-                github_org_key=sonar_org,
-                sprint_id=sprint_id_ui
-            )
-            if "error" in jira_result_team:
-                add_log_message(log_list, "error", f"TEAM JIRA Error: {jira_result_team['error']}")
-        else:
-            add_log_message(log_list, "warning", "No team selected. Skipping team JIRA metrics fetch.")
-            jira_result_team = {"error": "No team selected."}
+        # Now fire the rest, based on the extracted repo info
+        futures.update({
+            "git_ind": executor.submit(_fetch_individual_git_metrics, github_token, developer_name_ui, dev_repos_from_jira_individual, sonar_org, sprint_id_ui, log_list),
+            "git_team": executor.submit(_fetch_team_git_metrics, github_token, dev_repos_from_jira_team, sonar_org, sprint_id_ui, log_list),
+            "sonar_ind": executor.submit(_fetch_individual_sonar_metrics, sonar_token, sonar_org, dev_repos_from_jira_individual, log_list),
+            "sonar_team": executor.submit(_fetch_team_sonar_metrics, sonar_token, sonar_org, dev_repos_from_jira_team, log_list),
+        })
 
+        results["git_ind"] = futures["git_ind"].result()
+        results["git_team"] = futures["git_team"].result()
+        results["sonar_ind"], results["sonar_errs_ind"] = futures["sonar_ind"].result()
+        results["sonar_team"], results["sonar_errs_team"] = futures["sonar_team"].result()
 
-        # --- Fetch INDIVIDUAL Sonar Metrics ---
-        if dev_repos_from_jira_individual: 
-            add_log_message(log_list, "info", f"Sonar: Attempting to fetch INDIVIDUAL SonarCloud metrics for {len(dev_repos_from_jira_individual)} linked repositories.")
-            
-            add_log_message(log_list, "info", "Sonar: Discovering all projects in organization...")
-            all_sonar_org_projects = fetch_all_sonar_projects(sonar_token, sonar_org, log_list=log_list)
-            
-            if "error" in all_sonar_org_projects:
-                sonar_errors_individual.append(f"SonarCloud Project List Error: {all_sonar_org_projects['error']}")
-                add_log_message(log_list, "error", f"Sonar: Project List Error: {all_sonar_org_projects['error']}")
-            else:
-                sonar_key_map = {} 
-                for project in all_sonar_org_projects:
-                    sonar_key_map[project['key'].lower()] = project['key']
-                    sonar_key_map[project['name'].lower()] = project['key']
-                    
-                    if project['key'].startswith(sonar_org + '_') and '_' in project['key']:
-                        derived_jira_format = project['key'].replace('_', '/', 1)
-                        sonar_key_map[derived_jira_format.lower()] = project['key']
-                    elif '/' in project['key'] and project['key'].startswith(sonar_org + '/'):
-                        sonar_key_map[project['key'].lower()] = project['key']
+    return (
+        results["jira_ind"], results["git_ind"], results["sonar_ind"], results["sonar_errs_ind"],
+        results["jira_team"], results["git_team"], results["sonar_team"], results["sonar_errs_team"]
+    )
 
-                st.session_state.sonar_key_map_global = sonar_key_map
+def _fetch_individual_jira_metrics(jira_email, jira_token, developer_name_ui, sprint_id_ui, team_name_ui, log_list):
+    """Fetch individual JIRA metrics."""
+    if developer_name_ui and developer_name_ui != "--- Select a Developer ---":
+        add_log_message(log_list, "info", f"Fetching INDIVIDUAL JIRA metrics for '{developer_name_ui}'...")
+        jira_result = fetch_jira_metrics_via_api(
+            jira_email, jira_token, developer_name_ui, sprint_id=sprint_id_ui, team_name=team_name_ui, log_list=log_list
+        )
 
-                sonar_projects_to_fetch = []
-                for jira_repo_path in dev_repos_from_jira_individual:
-                    actual_sonar_project_key = _get_sonar_key_from_jira_repo_in_fetcher(jira_repo_path, sonar_org, sonar_key_map)
-                    
-                    if actual_sonar_project_key:
-                        sonar_projects_to_fetch.append(actual_sonar_project_key)
-                        # add_log_message(log_list, "info", f"Sonar: Mapped JIRA repo '{jira_repo_path}' to SonarCloud key '{actual_sonar_project_key}'.")
-                    # else:
-                        # sonar_errors_individual.append(f"Could not find SonarCloud project key for JIRA repo: '{jira_repo_path}'. It might not exist or its key/name differs.")
-                        # add_log_message(log_list, "warning", f"Sonar: Could not find SonarCloud project key for JIRA repo: '{jira_repo_path}'.")
+        dev_repos = jira_result.get("dev_branches", []) if "error" not in jira_result else []
+        return jira_result, dev_repos
+    else:
+        add_log_message(log_list, "warning", "No developer selected. Skipping individual JIRA metrics fetch.")
+        return {"error": "No developer selected."}, []
 
-                if sonar_projects_to_fetch:
-                    add_log_message(log_list, "info", f"Sonar: Fetching INDIVIDUAL metrics for {len(sonar_projects_to_fetch)} matched SonarCloud projects concurrently...")
-                    
-                    temp_sonar_data = [] 
-                    with ThreadPoolExecutor(max_workers=5) as executor:
-                        future_to_project_key = {executor.submit(fetch_single_project_metrics, sonar_token, pk, log_list=log_list): pk for pk in sonar_projects_to_fetch}
-                        for future in as_completed(future_to_project_key):
-                            project_key = future_to_project_key[future]
-                            try:
-                                metrics_result = future.result()
-                                if "error" in metrics_result:
-                                    sonar_errors_individual.append(f"Error fetching metrics for {project_key}: {metrics_result['error']}")
-                                    add_log_message(log_list, "error", f"Sonar: Failed to fetch metrics for {project_key}: {metrics_result['error']}")
-                                else:
-                                    temp_sonar_data.append(metrics_result)
-                            except Exception as e:
-                                sonar_errors_individual.append(f"Exception processing SonarCloud project {project_key}: {e}")
-                                add_log_message(log_list, "error", f"Sonar: Exception processing SonarCloud project {project_key}: {e}")
-                    sonar_all_projects_data_individual = temp_sonar_data 
-                    add_log_message(log_list, "info", "Sonar: INDIVIDUAL SonarCloud metrics fetching complete.")
-                else: 
-                    sonar_errors_individual.append("No matching SonarCloud projects found for JIRA-linked repositories for individual developer.")
-                    add_log_message(log_list, "warning", "Sonar: No matching SonarCloud projects found for JIRA-linked repositories for individual developer.")
-        else: 
-            sonar_errors_individual.append("No repositories linked from JIRA for individual SonarQube metrics.")
-            add_log_message(log_list, "warning", "Sonar: No repositories linked from JIRA for individual SonarQube metrics.")
+def _fetch_team_jira_metrics(jira_email, jira_token, team_id_ui, team_name_ui, sprint_id_ui, log_list):
+    """Fetch team JIRA metrics."""
+    if team_id_ui:
+        add_log_message(log_list, "info", f"Fetching TEAM JIRA metrics for team '{team_name_ui}'...")
+        jira_result = fetch_jira_metrics_for_team(
+            jira_email, jira_token, team_id_ui, team_name_ui, sprint_id=sprint_id_ui, log_list=log_list
+        )
+        dev_repos = jira_result.get("dev_branches", []) if "error" not in jira_result else []
+        return jira_result, dev_repos
+    else:
+        add_log_message(log_list, "warning", "No team selected. Skipping team JIRA metrics fetch.")
+        return {"error": "No team selected."}, []
 
-        # --- Fetch TEAM Sonar Metrics ---
-        if dev_repos_from_jira_team: 
-            add_log_message(log_list, "info", f"Sonar: Attempting to fetch TEAM SonarCloud metrics for {len(dev_repos_from_jira_team)} linked repositories.")
-            
-            add_log_message(log_list, "info", "Sonar: Discovering all projects in organization...")
-            all_sonar_org_projects_team = fetch_all_sonar_projects(sonar_token, sonar_org, log_list=log_list)
-            
-            if "error" in all_sonar_org_projects_team:
-                team_sonar_errors.append(f"SonarCloud Project List Error: {all_sonar_org_projects_team['error']}")
-                add_log_message(log_list, "error", f"Sonar: Project List Error: {all_sonar_org_projects_team['error']}")
-            else:
-                sonar_key_map = {} 
-                for project in all_sonar_org_projects_team:
-                    sonar_key_map[project['key'].lower()] = project['key']
-                    sonar_key_map[project['name'].lower()] = project['key']
-                    
-                    if project['key'].startswith(sonar_org + '_') and '_' in project['key']:
-                        derived_jira_format = project['key'].replace('_', '/', 1)
-                        sonar_key_map[derived_jira_format.lower()] = project['key']
-                    elif '/' in project['key'] and project['key'].startswith(sonar_org + '/'):
-                        sonar_key_map[project['key'].lower()] = project['key']
+def _fetch_individual_git_metrics(github_token, developer_name_ui, dev_repos, sonar_org, sprint_id_ui, log_list):
+    """Fetch individual Git metrics."""
+    if developer_name_ui and developer_name_ui != "--- Select a Developer ---":
+        add_log_message(log_list, "info", "Fetching INDIVIDUAL Git metrics...")
+        return fetch_git_metrics_via_api(
+            github_token, developer_name_ui, dev_repos, log_list=log_list, github_org_key=sonar_org, sprint_id=sprint_id_ui
+        )
+    else:
+        add_log_message(log_list, "warning", "No developer selected. Skipping individual Git metrics fetch.")
+        return {"error": "No developer selected."}
 
-                st.session_state.sonar_key_map_global = sonar_key_map
+def _fetch_team_git_metrics(github_token, dev_repos, sonar_org, sprint_id_ui, log_list):
+    """Fetch team Git metrics."""
+    if dev_repos:
+        add_log_message(log_list, "info", "Fetching TEAM Git metrics...")
+        return fetch_git_metrics_via_api(
+            github_token, None, dev_repos, log_list=log_list, github_org_key=sonar_org, sprint_id=sprint_id_ui
+        )
+    else:
+        add_log_message(log_list, "warning", "No repositories linked for team Git metrics fetch.")
+        return {"error": "No repositories linked."}
 
-                sonar_projects_to_fetch = []
-                for jira_repo_path in dev_repos_from_jira_team:
-                    actual_sonar_project_key_team = _get_sonar_key_from_jira_repo_in_fetcher(jira_repo_path, sonar_org, sonar_key_map)
-                    
-                    if actual_sonar_project_key_team:
-                        sonar_projects_to_fetch.append(actual_sonar_project_key_team)
-                        # add_log_message(log_list, "info", f"Sonar: Mapped JIRA repo '{jira_repo_path}' to SonarCloud key '{actual_sonar_project_key}'.")
-                    # else:
-                        # sonar_errors_individual.append(f"Could not find SonarCloud project key for JIRA repo: '{jira_repo_path}'. It might not exist or its key/name differs.")
-                        # add_log_message(log_list, "warning", f"Sonar: Could not find SonarCloud project key for JIRA repo: '{jira_repo_path}'.")
+def _fetch_individual_sonar_metrics(sonar_token, sonar_org, dev_repos, log_list):
+    """Fetch individual Sonar metrics."""
+    if dev_repos:
+        add_log_message(log_list, "info", "Fetching INDIVIDUAL Sonar metrics...")
+        return _fetch_sonar_metrics(sonar_token, sonar_org, dev_repos, log_list)
+    else:
+        add_log_message(log_list, "warning", "No repositories linked for individual Sonar metrics fetch.")
+        return [], ["No repositories linked."]
 
-                if sonar_projects_to_fetch:
-                    add_log_message(log_list, "info", f"Sonar: Fetching TEAM metrics for {len(sonar_projects_to_fetch)} matched SonarCloud projects concurrently...")
-                    
-                    temp_sonar_data = [] 
-                    with ThreadPoolExecutor(max_workers=5) as executor:
-                        future_to_project_key = {executor.submit(fetch_single_project_metrics, sonar_token, pk, log_list=log_list): pk for pk in sonar_projects_to_fetch}
-                        for future in as_completed(future_to_project_key):
-                            project_key = future_to_project_key[future]
-                            try:
-                                metrics_result = future.result()
-                                if "error" in metrics_result:
-                                    team_sonar_errors.append(f"Error fetching metrics for {project_key}: {metrics_result['error']}")
-                                    add_log_message(log_list, "error", f"Sonar: Failed to fetch metrics for {project_key}: {metrics_result['error']}")
-                                else:
-                                    temp_sonar_data.append(metrics_result)
-                            except Exception as e:
-                                team_sonar_errors.append(f"Exception processing SonarCloud project {project_key}: {e}")
-                                add_log_message(log_list, "error", f"Sonar: Exception processing SonarCloud project {project_key}: {e}")
-                    sonar_metrics_team = temp_sonar_data 
-                    add_log_message(log_list, "info", "Sonar: TEAM SonarCloud metrics fetching complete.")
-                else: 
-                    team_sonar_errors.append("No matching SonarCloud projects found for JIRA-linked repositories for TEAM developer.")
-                    add_log_message(log_list, "warning", "Sonar: No matching SonarCloud projects found for JIRA-linked repositories for TEAM developer.")
-        else: 
-            team_sonar_errors.append("No repositories linked from JIRA for TEAM SonarQube metrics.")
-            add_log_message(log_list, "warning", "Sonar: No repositories linked from JIRA for TEAM SonarQube metrics.")
+def _fetch_team_sonar_metrics(sonar_token, sonar_org, dev_repos, log_list):
+    """Fetch team Sonar metrics."""
+    if dev_repos:
+        add_log_message(log_list, "info", "Fetching TEAM Sonar metrics...")
+        return _fetch_sonar_metrics(sonar_token, sonar_org, dev_repos, log_list)
+    else:
+        add_log_message(log_list, "warning", "No repositories linked for team Sonar metrics fetch.")
+        return [], ["No repositories linked."]
 
+def _fetch_sonar_metrics(sonar_token, sonar_org, dev_repos, log_list):
+    """Fetch Sonar metrics for given repositories."""
+    all_projects = fetch_all_sonar_projects(sonar_token, sonar_org, log_list=log_list)
+    if "error" in all_projects:
+        add_log_message(log_list, "error", f"Sonar project list error: {all_projects['error']}")
+        return [], [f"Sonar project list error: {all_projects['error']}"]
+        
+    sonar_key_map = {proj['key'].lower(): proj['key'] for proj in all_projects}
 
+    if sonar_key_map and not st.session_state.get('sonar_key_map_global'):
+        st.session_state.sonar_key_map_global = sonar_key_map
+        # print(f"DEBUG: Set sonar_key_map_global with {len(sonar_key_map)} entries")
+    # elif sonar_key_map:
+    #     # print(f"DEBUG: Session state already populated, not overwriting")
+    # else:
+    #     # print(f"DEBUG: sonar_key_map is empty, not updating session state")
 
-    except Exception as e:
-        add_log_message(log_list, "critical", f"An unexpected error occurred during metric generation: {e}")
-    
-    return (jira_result_individual, git_metrics_individual, sonar_all_projects_data_individual, sonar_errors_individual,
-            jira_result_team, git_metrics_team, sonar_metrics_team, team_sonar_errors) # Return all results
+    sonar_projects = [_get_sonar_key_from_jira_repo_in_fetcher(repo, sonar_org, sonar_key_map) for repo in dev_repos]
+    sonar_projects = [proj for proj in sonar_projects if proj]
+    if not sonar_projects:
+        add_log_message(log_list, "warning", "No matching Sonar projects found.")
+        return [], ["No matching Sonar projects found."]
+    metrics = []
+    errors = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_project = {executor.submit(fetch_single_project_metrics, sonar_token, proj, log_list=log_list): proj for proj in sonar_projects}
+        for future in as_completed(future_to_project):
+            project = future_to_project[future]
+            try:
+                result = future.result()
+                if "error" in result:
+                    errors.append(f"Error fetching metrics for {project}: {result['error']}")
+                else:
+                    metrics.append(result)
+            except Exception as e:
+                errors.append(f"Exception fetching metrics for {project}: {e}")
+    return metrics, errors
 
 
 # --- Helper to get the potential Sonar Key from JIRA repo path (uses global session state map) ---
-def _get_sonar_key_from_jira_repo(jira_repo_path, sonar_org):
+def _get_sonar_key_from_jira_repo(jira_repo_path, log_list):
     """
     Attempts to find the SonarCloud project key from a JIRA repo path using the global map.
     This helper is used for UI rendering, after the map has been populated.
     """
+    if not st.session_state.get('sonar_key_map_global'):
+        all_projects = fetch_all_sonar_projects(sonar_token, sonar_org, log_list)
+        if "error" in all_projects:
+            add_log_message(log_list, "error", f"Sonar project list error: {all_projects['error']}")
+            return [], [f"Sonar project list error: {all_projects['error']}"]
+        
+        sonar_key_map = {proj['key'].lower(): proj['key'] for proj in all_projects}
+
+        st.session_state.sonar_key_map_global = sonar_key_map
+        # print(f"DEBUG: For charts - Set sonar_key_map_global with {len(sonar_key_map)} entries")
+
+
+    # print(f"map size = {len(st.session_state.sonar_key_map_global)}")
     sonar_key_map = st.session_state.get('sonar_key_map_global', {})
+    # print(f"DEBUG: Retrieved sonar_key_map = {sonar_key_map}")
     
-    if not sonar_key_map:
+    if not sonar_key_map or isinstance(sonar_key_map, str):
+        # print(f"DEBUG: Returning None - empty map or string type")
         return None 
 
     cleaned_jira_path_for_match = jira_repo_path.lower()
+    # print(f"cleaned_jira_path_for_match = {cleaned_jira_path_for_match}")
     
     if cleaned_jira_path_for_match in sonar_key_map:
-         return sonar_key_map[cleaned_jira_path_for_match]
+        return sonar_key_map[cleaned_jira_path_for_match]
 
     transformed_jira_path_for_match = jira_repo_path.replace('/', '_', 1).lower()
+    # print(f"transformed_jira_path_for_match = {transformed_jira_path_for_match}")
     if transformed_jira_path_for_match in sonar_key_map:
         return sonar_key_map[transformed_jira_path_for_match]
     
     repo_name_part = jira_repo_path.split('/')[-1].lower()
+    # print(f"repo_name_part = {repo_name_part}")
     if repo_name_part in sonar_key_map:
         return sonar_key_map[repo_name_part]
 
     return None 
-
-
-# --- Team Aggregation Functions ---
-# def _aggregate_git_sonar_for_team(all_members_individual_metrics, team_dev_branches_from_jira_team_issues, team_members_from_jira_issues, github_token, sonar_token, sonar_org, log_list):
-#     """
-#     Aggregates Git and Sonar metrics for the team based on individual data and team-linked repos.
-#     """
-#     log_list.append("[INFO] Aggregating Git and Sonar metrics for the team dashboard...")
-
-#     aggregated_git = {
-#         "commits": 0, "lines_added": 0, "lines_deleted": 0, "files_changed": 0,
-#         "prs_created": 0, "prs_merged": 0, "review_comments_given": 0
-#     }
-    
-#     aggregated_sonar = {
-#         "total_bugs_overall": 0, "total_vulnerabilities_overall": 0, "total_code_smells_overall": 0, "total_ncloc_overall": 0,
-#         "total_bugs_new_code": 0, "total_vulnerabilities_new_code": 0, "total_code_smells_new_code": 0, "total_new_technical_debt": 0,
-#         "avg_coverage_overall_sum": 0, "avg_coverage_overall_count": 0,
-#         "avg_duplicated_lines_density_overall_sum": 0, "avg_duplicated_lines_density_overall_count": 0,
-#         "avg_coverage_new_code_sum": 0, "avg_coverage_new_code_count": 0,
-#         "avg_duplicated_lines_density_new_code_sum": 0, "avg_duplicated_lines_density_new_code_count": 0,
-#         "unique_sonar_projects_count": 0
-#     }
-    
-#     unique_sonar_projects_processed = set() # To prevent double counting sonar projects
-
-
-#     # --- Git Aggregation for Team ---
-#     if team_members_from_jira_issues and github_token:
-#         log_list.append(f"[INFO] Git Team Aggregation: Fetching Git metrics for {len(team_members_from_jira_issues)} team members and {len(team_dev_branches_from_jira_team_issues)} unique repos.")
-        
-#         with ThreadPoolExecutor(max_workers=3) as executor: # Limit concurrency for API calls
-#             future_to_member = {
-#                 executor.submit(fetch_git_metrics_via_api, github_token, member_name, team_dev_branches_from_jira_team_issues, log_list, sonar_org): member_name
-#                 for member_name in team_members_from_jira_issues
-#             }
-#             for future in as_completed(future_to_member):
-#                 member_name = future_to_member[future]
-#                 try:
-#                     member_git_metrics = future.result()
-#                     if "error" not in member_git_metrics:
-#                         for key in aggregated_git:
-#                             aggregated_git[key] += member_git_metrics.get(key, 0)
-#                     else:
-#                         log_list.append(f"[WARNING] Git Team: Skipping '{member_name}' due to error: {member_git_metrics['error']}")
-#                 except Exception as e:
-#                     add_log_message(log_list, "error", f"Git Team: Exception fetching Git for '{member_name}': {e}")
-        
-#         if not any(aggregated_git.values()): 
-#             git_metrics_team = {"error": "No aggregated Git data for team or an error occurred."}
-#             log_list.append("[WARNING] Git Team: No aggregated Git data found for team.")
-#         else:
-#             git_metrics_team = aggregated_git
-#             log_list.append("[INFO] Git Team: Aggregation complete.")
-#     else:
-#         git_metrics_team = {"error": "Git aggregation skipped (no GitHub token, no team members, or no linked repos)."}
-#         log_list.append("[WARNING] Git Team: Aggregation skipped.")
-
-
-    # --- Sonar Aggregation for Team ---
-    # sonar_metrics_team_final = {}
-    # team_sonar_errors_local = []
-
-    # if team_dev_branches_from_jira_team_issues and sonar_token:
-    #     log_list.append(f"[INFO] Sonar Team Aggregation: Discovering Sonar projects for {len(team_dev_branches_from_jira_team_issues)} unique team repos.")
-        
-    #     all_sonar_org_projects_for_team_map = fetch_all_sonar_projects(sonar_token, sonar_org, log_list=log_list)
-    #     if "error" in all_sonar_org_projects_for_team_map:
-    #         sonar_metrics_team_final = {"error": f"Failed to get Sonar project list for team aggregation: {all_sonar_org_projects_for_team_map['error']}"}
-    #         team_sonar_errors_local.append(sonar_metrics_team_final["error"])
-    #     else:
-    #         team_sonar_key_map_local = {}
-    #         for project in all_sonar_org_projects_for_team_map:
-    #             team_sonar_key_map_local[project['key'].lower()] = project['key']
-    #             team_sonar_key_map_local[project['name'].lower()] = project['key']
-    #             if project['key'].startswith(sonar_org + '_') and '_' in project['key']:
-    #                 derived_jira_format = project['key'].replace('_', '/', 1)
-    #                 team_sonar_key_map_local[derived_jira_format.lower()] = project['key']
-    #             elif '/' in project['key'] and project['key'].startswith(sonar_org + '/'):
-    #                 team_sonar_key_map_local[project['key'].lower()] = project['key']
-
-    #         sonar_projects_to_fetch_for_team = []
-    #         for jira_repo_path in team_dev_branches_from_jira_team_issues:
-    #             actual_sonar_project_key = _get_sonar_key_from_jira_repo_in_fetcher(jira_repo_path, sonar_org, team_sonar_key_map_local)
-    #             if actual_sonar_project_key:
-    #                 sonar_projects_to_fetch_for_team.append(actual_sonar_project_key)
-    #             else:
-    #                 log_list.append(f"[WARNING] Sonar Team: Could not map repo '{jira_repo_path}' for aggregation.")
-            
-    #         if sonar_projects_to_fetch_for_team:
-    #             log_list.append(f"[INFO] Sonar Team Aggregation: Fetching metrics for {len(sonar_projects_to_fetch_for_team)} unique Sonar projects concurrently.")
-    #             raw_team_sonar_metrics = []
-    #             with ThreadPoolExecutor(max_workers=3) as executor:
-    #                 future_to_team_proj = {
-    #                     executor.submit(fetch_single_project_metrics, sonar_token, pk, log_list=log_list): pk
-    #                     for pk in sonar_projects_to_fetch_for_team
-    #                 }
-    #                 for future in as_completed(future_to_team_proj):
-    #                     proj_key = future_to_team_proj[future]
-    #                     try:
-    #                         proj_metrics = future.result()
-    #                         if "error" not in proj_metrics:
-    #                             raw_team_sonar_metrics.append(proj_metrics)
-    #                         else:
-    #                             team_sonar_errors_local.append(f"Error fetching Sonar for team project '{proj_key}': {proj_metrics['error']}")
-    #                             add_log_message(log_list, "warning", f"Sonar: Error fetching for '{proj_key}': {proj_metrics['error']}")
-    #                     except Exception as e:
-    #                         team_sonar_errors_local.append(f"Exception fetching Sonar for team project '{proj_key}': {e}")
-    #                         add_log_message(log_list, "error", f"Sonar Team: Exception for '{proj_key}': {e}")
-                
-    #             if raw_team_sonar_metrics:
-    #                 aggregated_sonar_results = {"Total Projects Processed": len(raw_team_sonar_metrics)}
-
-    #                 for key in ['coverage_overall', 'duplicated_lines_density_overall', 'coverage_new_code', 'duplicated_lines_density_new_code']:
-    #                     values = [float(p.get(key, 0)) for p in raw_team_sonar_metrics if p.get(key) not in ["N/A", None]]
-    #                     aggregated_sonar_results[f"Avg {key}"] = round(stats.mean(values), 1) if values else "N/A"
-                    
-    #                 for key in ['bugs_overall', 'code_smells_overall', 'vulnerabilities_overall', 'ncloc_overall',
-    #                             'bugs_new_code', 'code_smells_new_code', 'vulnerabilities_new_code', 'new_technical_debt']:
-    #                     values = [int(float(p.get(key, 0))) for p in raw_team_sonar_metrics if p.get(key) not in ["N/A", None]]
-    #                     aggregated_sonar_results[f"Total {key}"] = sum(values) if values else 0
-
-    #                 aggregated_sonar_results["Ratings Aggregation Note"] = "Detailed rating averages (A-E) are complex and not aggregated in this version."
-                    
-    #                 sonar_metrics_team_final = aggregated_sonar_results
-    #                 log_list.append("[INFO] Sonar Team: Aggregation complete.")
-    #             else:
-    #                 sonar_metrics_team_final = {"error": "No Sonar data available for team projects or an error occurred during fetch for aggregation."}
-    #                 log_list.append("[WARNING] Sonar Team: No Sonar data for aggregation.")
-    #         else:
-    #             sonar_metrics_team_final = {"error": "Failed to discover Sonar projects for team aggregation."}
-    #             log_list.append("[WARNING] Sonar Team: No projects identified for aggregation.")
-    # else:
-    #     sonar_metrics_team_final = {"error": "Sonar aggregation skipped (no Sonar token or no team repos from Jira)."}
-    #     log_list.append("[WARNING] Sonar Team: Aggregation skipped.")
-
-    # return git_metrics_team, sonar_metrics_team_final, team_sonar_errors_local # Return these three specific results for team
-
 
 
 # --- Added helper for use ONLY within _fetch_all_metrics function for mapping ---
@@ -588,6 +413,8 @@ def _get_sonar_key_from_jira_repo_in_fetcher(jira_repo_path, sonar_org, sonar_ke
 
 # --- Main App Execution Flow ---
 if generate_metrics_button:
+    start_time = datetime.now()
+
     # Clear previous logs and data
     st.session_state.log_messages = []
     st.session_state.jira_result_individual = {}
@@ -625,14 +452,17 @@ if generate_metrics_button:
         status_message_placeholder = st.empty() 
         status_message_placeholder.info("✅ Fetching metrics... Please wait, this may take a moment.")
         
-        # Call the orchestrator function
-        (jira_res_ind, git_met_ind, sonar_data_ind, sonar_errs_ind,
-         jira_res_team, git_met_team, sonar_met_team, sonar_errs_team) = _fetch_all_metrics(
+        args = (
             current_jira_email, current_jira_token, current_github_token,
-            current_sonar_token, current_sonar_org, current_developer_name, 
-            current_sprint_id, current_team_name, current_team_id, 
+            current_sonar_token, current_sonar_org, current_developer_name,
+            current_sprint_id, current_team_name, current_team_id,
             st.session_state.log_messages
         )
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future = executor.submit(_fetch_all_metrics, *args)
+            (jira_res_ind, git_met_ind, sonar_data_ind, sonar_errs_ind,
+            jira_res_team, git_met_team, sonar_met_team, sonar_errs_team) = future.result()
         
         # Store results in session state
         st.session_state.jira_result_individual = jira_res_ind
@@ -661,6 +491,9 @@ if generate_metrics_button:
         else:
             status_message_placeholder.error("❌ Metrics generation finished with errors. Check logs for details.")
         add_log_message(st.session_state.log_messages, "info", "Metrics generation process finished.")
+        
+        end_time = datetime.now()
+        add_log_message(st.session_state.log_messages, "Info", f"Success: Data fetching complete! Duration: {end_time - start_time}")
 
 
 # --- Display Metrics and Charts (conditionally based on data_fetched flag in session state) ---
@@ -672,6 +505,17 @@ with st.expander("View Processing Logs"):
             st.code(log_msg, language="text")
     else:
         st.info("No logs generated yet. Click 'Generate Metrics' to see activity.")
+
+
+def seconds_to_hm(seconds_str):
+    try:
+        seconds = int(seconds_str)
+    except (ValueError, TypeError):
+        return "Invalid input"
+
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    return f"{hours} hrs {minutes} mins"
 
 if st.session_state.data_fetched:
     # --- Tabs for Individual and Team ---
@@ -686,9 +530,23 @@ if st.session_state.data_fetched:
             st.markdown("**JIRA Metrics**")
             if st.session_state.jira_result_individual and "error" not in st.session_state.jira_result_individual:
                 jira_display_data = {k: v for k, v in st.session_state.jira_result_individual.items() if k != 'dev_branches'}
-                df_jira_metrics = pd.DataFrame(jira_display_data.items(), columns=["Metric", "Value"])
-                # Start index from 1 for better readability
+
+                formatted_data = {}
+                for key, value in jira_display_data.items():
+                    try:
+                        if key == "logged_time":
+                            formatted_data[key] = seconds_to_hm(value)  # keep as string
+                        elif key in {"avg_lead_time", "avg_cycle_time"}:
+                            formatted_data[key] = round(float(value), 1)
+                        else:
+                            formatted_data[key] = int(float(value))
+                    except Exception:
+                        # fallback if parsing fails
+                        formatted_data[key] = str(value)
+
+                df_jira_metrics = pd.DataFrame(formatted_data.items(), columns=["Metric", "Value"])
                 df_jira_metrics.index = np.arange(1, len(df_jira_metrics) + 1)
+
                 st.dataframe(df_jira_metrics, use_container_width=True)
                 
             elif "error" in st.session_state.jira_result_individual: 
@@ -722,8 +580,7 @@ if st.session_state.data_fetched:
                 repo_display_options = ["--- Select a Repository ---"]
                 
                 for jira_repo_path in linked_repos_for_display:
-                    sonar_key = _get_sonar_key_from_jira_repo(jira_repo_path, st.session_state.sonar_org_input)
-                    
+                    sonar_key = _get_sonar_key_from_jira_repo(jira_repo_path, log_list=st.session_state.log_messages)
                     if sonar_key:
                         has_sonar_data = any(proj['Project Key'] == sonar_key for proj in st.session_state.sonar_all_projects_data_individual)
                         if has_sonar_data:
@@ -745,7 +602,7 @@ if st.session_state.data_fetched:
                 if selected_repo_display_name != "--- Select a Repository ---":
                     original_jira_repo_path_from_selection = selected_repo_display_name.split(' (')[0]
                     
-                    actual_sonar_key_for_radar = _get_sonar_key_from_jira_repo(original_jira_repo_path_from_selection, st.session_state.sonar_org_input)
+                    actual_sonar_key_for_radar = _get_sonar_key_from_jira_repo(original_jira_repo_path_from_selection, log_list=st.session_state.log_messages)
                     
                     if actual_sonar_key_for_radar:
                         selected_sonar_metrics = next(
@@ -822,7 +679,7 @@ if st.session_state.data_fetched:
                 
                 # Define desired display column order and filter to actual existing columns
                 sonar_display_cols = [
-                    "Project Key", "alert_status", "coverage", "coverage_with_rating", "bugs",
+                    "Project Key", "alert_status", "coverage", "bugs",
                     "Reliability Rating (A-E)", "vulnerabilities", "Security Rating (A-E)",
                     "Security Hotspot Rating (A-E)", "code_smells", "Maintainability Rating (A-E)",
                     "duplicated_lines_density", "ncloc"
@@ -851,12 +708,25 @@ if st.session_state.data_fetched:
             st.markdown("**JIRA Metrics (Team)**")
             if st.session_state.jira_result_team and "error" not in st.session_state.jira_result_team:
                 jira_team_display_data = {k: v for k, v in st.session_state.jira_result_team.items() if k != 'dev_branches'} # Exclude raw issues data if present
-                df_team_jira_metrics = pd.DataFrame(jira_team_display_data.items(), columns=["Metric", "Value"])
-                # Start index from 1 for better readability
+                
+                formatted_data = {}
+                for key, value in jira_team_display_data.items():
+                    try:
+                        if key == "logged_time":
+                            formatted_data[key] = seconds_to_hm(value)  # keep as string
+                        elif key in {"avg_lead_time", "avg_cycle_time"}:
+                            formatted_data[key] = round(float(value), 1)
+                        else:
+                            formatted_data[key] = int(float(value))
+                    except Exception:
+                        # fallback if parsing fails
+                        formatted_data[key] = str(value)
+
+                df_team_jira_metrics = pd.DataFrame(formatted_data.items(), columns=["Metric", "Value"])
                 df_team_jira_metrics.index = np.arange(1, len(df_team_jira_metrics) + 1)
+
                 st.dataframe(df_team_jira_metrics, use_container_width=True)
-                    
-                # st.dataframe(pd.DataFrame(jira_team_display_data.items(), columns=["Metric", "Value"]), use_container_width=True)
+
             elif "error" in st.session_state.jira_result_team:
                 st.error(st.session_state.jira_result_team["error"])
             else:
@@ -889,7 +759,7 @@ if st.session_state.data_fetched:
                 repo_display_options = ["--- Select a Repository ---"]
                 
                 for jira_repo_path in team_linked_repos_for_display:
-                    sonar_key = _get_sonar_key_from_jira_repo(jira_repo_path, st.session_state.sonar_org_input)
+                    sonar_key = _get_sonar_key_from_jira_repo(jira_repo_path, log_list=st.session_state.log_messages)
                     
                     if sonar_key:
                         has_sonar_data = any(proj['Project Key'] == sonar_key for proj in st.session_state.sonar_metrics_team)
@@ -912,7 +782,7 @@ if st.session_state.data_fetched:
                 if selected_repo_display_name != "--- Select a Repository ---":
                     original_jira_repo_path_from_selection = selected_repo_display_name.split(' (')[0]
                     
-                    actual_sonar_key_for_radar = _get_sonar_key_from_jira_repo(original_jira_repo_path_from_selection, st.session_state.sonar_org_input)
+                    actual_sonar_key_for_radar = _get_sonar_key_from_jira_repo(original_jira_repo_path_from_selection, log_list=st.session_state.log_messages)
                     
                     if actual_sonar_key_for_radar:
                         team_selected_sonar_metrics = next(
@@ -990,7 +860,7 @@ if st.session_state.data_fetched:
                 
                 # Define desired display column order and filter to actual existing columns
                 sonar_display_cols = [
-                    "Project Key", "alert_status", "coverage", "coverage_with_rating", "bugs",
+                    "Project Key", "alert_status", "coverage", "bugs",
                     "Reliability Rating (A-E)", "vulnerabilities", "Security Rating (A-E)",
                     "Security Hotspot Rating (A-E)", "code_smells", "Maintainability Rating (A-E)",
                     "duplicated_lines_density", "ncloc"
