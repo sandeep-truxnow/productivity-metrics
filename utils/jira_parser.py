@@ -477,7 +477,7 @@ def fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id
 # --- New: Function to fetch JIRA metrics for a Team ---
 # MODIFIED: Added 'headers' variable creation and passing to _process_jira_issues
 def fetch_jira_metrics_for_team(jira_email, jira_token, team_id, team_name, sprint_id, log_list):
-    log_list.append(f"[INFO] JIRA: Starting fetch for TEAM '{team_name}' (ID: {team_id}) in sprint '{sprint_id}'...")
+    # log_list.append(f"[INFO] JIRA: Starting fetch for TEAM '{team_name}' (ID: {team_id}) in sprint '{sprint_id}'...")
     
     if not jira_email or not jira_token:
         log_list.append("[ERROR] JIRA: Credentials (email/token) not provided for team fetch.")
@@ -517,7 +517,7 @@ def fetch_jira_metrics_for_team(jira_email, jira_token, team_id, team_name, spri
         # log_list.append(f"[INFO] JIRA Team API: GET {url} \n Headers: {headers} \n Params: {params}")
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status() 
-        log_list.append(f"[INFO] JIRA API: GET {url} - Status: {response.status_code}")
+        # log_list.append(f"[INFO] JIRA API: GET {url} - Status: {response.status_code}")
     except requests.exceptions.RequestException as e:
         log_list.append(f"[ERROR] JIRA Team API Request Error: {e}")
         return {"error": f"JIRA Team API failed: {e}"}

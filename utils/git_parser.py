@@ -13,7 +13,7 @@ def _get_github_login_from_fullname(github_token, full_name_from_ui, github_org_
 
     # above code return error, AttributeError: 'NoneType' object has no attribute 'lower'
     if not github_token or not full_name_from_ui or not github_org_key:
-        log_list.append("[ERROR] Git: Missing required parameters for resolving GitHub login.")
+        # log_list.append("[ERROR] Git: Missing required parameters for resolving GitHub login.")
         return None
 
     cache_key = f"{full_name_from_ui.lower()}_{github_org_key.lower()}"
@@ -104,8 +104,8 @@ def fetch_git_metrics_via_api(github_token, developer_name, repos, log_list, git
     log_list.append(f"[INFO] Git: Starting fetch for developer '{developer_name}' across {len(repos)} repositories in org '{github_org_key}'...")
 
     github_login = _get_github_login_from_fullname(github_token, developer_name, github_org_key, log_list)
-    if not github_login:
-        log_list.append(f"[ERROR] Git: Cannot proceed with metrics fetch. Could not resolve developer name '{developer_name}' to a GitHub login. Or fetching team metrics.")
+    # if not github_login:
+    #     log_list.append(f"[ERROR] Git: Cannot proceed with metrics fetch. Could not resolve developer name '{developer_name}' to a GitHub login. Or fetching team metrics.")
         # return {"error": f"Cannot proceed. Could not resolve developer name '{developer_name}' to GitHub login."}
 
     sprint_start_date, sprint_end_date = _calculate_sprint_dates(sprint_id, log_list)
@@ -158,7 +158,7 @@ def _process_repository(repo_full_name, github_login, headers, sprint_start_date
         log_list.append(f"[WARNING] Git: Skipping invalid repo format: '{repo_full_name}'. Expected 'owner/repo-name'.")
         return
 
-    log_list.append(f"[INFO] Git: Processing repo: '{owner_repo}'")
+    # log_list.append(f"[INFO] Git: Processing repo: '{owner_repo}'")
     _process_pull_requests(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list)
     _process_commits(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list)
     get_review_comments_given(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list)
@@ -216,8 +216,8 @@ def _process_commits(owner_repo, github_login, headers, sprint_start_date, sprin
 
         for commit in commits:
             author_data = commit.get("author")
-            if not author_data:
-                log_list.append(f"[INFO] Skipping commit {commit.get('sha')[:7]}: no author info.")
+            # if not author_data:
+            #     log_list.append(f"[INFO] Skipping commit {commit.get('sha')[:7]}: no author info.")
             author_login = author_data.get("login", "").lower() if author_data else ""
             login_to_match = github_login.lower() if github_login else None
 

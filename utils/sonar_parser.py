@@ -37,7 +37,7 @@ def fetch_all_sonar_projects(sonar_token, org_key, log_list):
     """
     Fetches a list of all project keys and names for a given organization from SonarCloud.
     """
-    log_list.append(f"[INFO] Sonar: Discovering all projects for organization: '{org_key}'...")
+    # log_list.append(f"[INFO] Sonar: Discovering all projects for organization: '{org_key}'...")
     url_path = "/api/components/search"
     params = {"organization": org_key, "qualifiers": "TRK", "ps": 500} # TRK for projects, ps for page size
     
@@ -60,7 +60,7 @@ def fetch_single_project_metrics(sonar_token, project_key, log_list):
     Fetches specific metrics and ratings for a single SonarCloud project.
     Includes logic for mapping coverage rating to A-E.
     """
-    log_list.append(f"[INFO] Sonar: Fetching metrics for project: '{project_key}'...")
+    # log_list.append(f"[INFO] Sonar: Fetching metrics for project: '{project_key}'...")
     url_path = "/api/measures/component"
     
     metric_keys_to_fetch = [
