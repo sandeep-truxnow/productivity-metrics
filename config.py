@@ -43,23 +43,3 @@ DURATION_OPTIONS = OrderedDict([
     ("Year to Date", "startOfYear()")
 ])
 
-# def get_previous_sprints(count=5):
-#     """Generate previous sprint names"""
-#     import datetime
-#     current_year = datetime.datetime.now().year
-#     sprints = []
-    
-#     # Generate sprints for current year
-#     for i in range(1, 27):  # Assuming 26 sprints per year
-#         sprint_name = f"{current_year}.{i:02d}"
-#         sprints.append(sprint_name)
-    
-#     # Add previous year sprints if needed
-#     if count > 26:
-#         prev_year = current_year - 1
-#         for i in range(1, count - 26 + 1):
-#             sprint_name = f"{prev_year}.{i:02d}"
-#             sprints.insert(0, sprint_name)
-    
-#     return sprints[-count:]
-
