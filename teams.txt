@@ -1,0 +1,33 @@
+A-Team|Amsal Karic
+A-Team|Lukas Trneny
+A-Team|Vladyslav Plietnov
+A-Team|Oleksandr Kramar
+Avengers|Gauresh Gawas
+Avengers|Madhura Paliwan
+Avengers|Pritam Shejul
+Avengers|Sayali Patil
+Avengers|Sneha Janokar
+Avengers|Somanath Jasud
+Avengers|Vishal Jadhav
+Jarvis|Rohan Chaudhari
+Jarvis|Satyajeet Mohite
+Jarvis|Vishal Varpe
+Jarvis|Pratik Dandavate
+Jarvis|Rahul Kamble
+Jarvis|Umesh Tayade
+Mavrix|Abhilash Kalaskar
+Mavrix|Nandkumar Waghmode
+Mavrix|Narendra Satpute
+Mavrix|Saurabh Asati
+Mavrix|Omkar Kawade
+Phoenix|Harshal Shinde
+Phoenix|Yogesh Maurya
+Phoenix|Balaji Takle
+Phoenix|Mayur Dhanesh Jadhav
+Phoenix|Pavan Khatri
+Quantum|Archit Agrawal
+Quantum|Siva sagar
+Quantum|Mohammad Reyaz Ansari
+Quantum|Neesha Shrivas
+Quantum|Shrikrishna Borde
+Quantum|Varun Vajpayee

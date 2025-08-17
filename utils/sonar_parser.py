@@ -55,6 +55,130 @@ def fetch_all_sonar_projects(sonar_token, org_key, log_list):
     log_list.append(f"[INFO] Sonar: Found {len(projects)} projects in '{org_key}'.")
     return projects
 
+def fetch_new_code_metrics(sonar_token, project_key, branch="qa", log_list=None):
+    """
+    Fetches new code metrics using the correct SonarCloud API endpoints.
+    """
+    if log_list is None:
+        log_list = []
+    
+    # Use issues/search API for new code issues
+    issues_url = "/api/issues/search"
+    issues_params = {
+        "componentKeys": project_key,
+        "inNewCodePeriod": "true",
+        "branch": branch,
+        "ps": 500  # page size
+    }
+    
+    issues_data = make_sonar_request(sonar_token, issues_url, issues_params, log_list)
+    
+    # Count issues by type
+    new_bugs = 0
+    new_vulnerabilities = 0
+    new_code_smells = 0
+    new_security_hotspots = 0
+    
+    if "error" not in issues_data:
+        for issue in issues_data.get("issues", []):
+            issue_type = issue.get("type", "")
+            if issue_type == "BUG":
+                new_bugs += 1
+            elif issue_type == "VULNERABILITY":
+                new_vulnerabilities += 1
+            elif issue_type == "CODE_SMELL":
+                new_code_smells += 1
+            elif issue_type == "SECURITY_HOTSPOT":
+                new_security_hotspots += 1
+    
+    # Get coverage and duplication metrics
+    measures_url = "/api/measures/component"
+    measures_params = {
+        "component": project_key,
+        "metricKeys": "new_coverage,new_duplicated_lines_density",
+        "branch": branch
+    }
+    
+    measures_data = make_sonar_request(sonar_token, measures_url, measures_params, log_list)
+    
+    new_coverage = "N/A"
+    new_duplication = "N/A"
+    
+    if "error" not in measures_data:
+        for measure in measures_data.get("component", {}).get("measures", []):
+            if measure["metric"] == "new_coverage":
+                new_coverage = f"{float(measure.get('value', 0)):.1f}%"
+            elif measure["metric"] == "new_duplicated_lines_density":
+                new_duplication = f"{float(measure.get('value', 0)):.1f}%"
+    
+    return {
+        "project_key": project_key,
+        "new_bugs": new_bugs,
+        "new_vulnerabilities": new_vulnerabilities,
+        "new_code_smells": new_code_smells,
+        "new_security_hotspots": new_security_hotspots,
+        "new_coverage": new_coverage,
+        "new_duplicated_lines_density": new_duplication
+    }
+
+def fetch_sonar_metrics_for_repos(sonar_token, org_key, repo_names, branch="qa", log_list=None):
+    """
+    Fetches new code metrics for multiple repositories.
+    Maps repository names to SonarCloud project keys using org_repo format.
+    """
+    if log_list is None:
+        log_list = []
+    
+    aggregated_metrics = {
+        "new_bugs": 0,
+        "new_vulnerabilities": 0,
+        "new_code_smells": 0,
+        "new_security_hotspots": 0,
+        "projects_analyzed": 0,
+        "coverage_values": [],
+        "duplication_values": []
+    }
+    
+    for repo_name in repo_names:
+        # Convert repo name to SonarCloud project key format
+        if "/" in repo_name:
+            org, service = repo_name.split("/", 1)
+            project_key = f"{org}_{service}"
+        else:
+            project_key = f"{org_key}_{repo_name}"
+        
+        metrics = fetch_new_code_metrics(sonar_token, project_key, branch, log_list)
+        
+        if "error" not in metrics:
+            aggregated_metrics["new_bugs"] += metrics.get("new_bugs", 0)
+            aggregated_metrics["new_vulnerabilities"] += metrics.get("new_vulnerabilities", 0)
+            aggregated_metrics["new_code_smells"] += metrics.get("new_code_smells", 0)
+            aggregated_metrics["new_security_hotspots"] += metrics.get("new_security_hotspots", 0)
+            aggregated_metrics["projects_analyzed"] += 1
+            
+            # Collect coverage and duplication values for averaging
+            coverage = metrics.get("new_coverage", "N/A")
+            if coverage != "N/A":
+                aggregated_metrics["coverage_values"].append(float(coverage.replace("%", "")))
+            
+            duplication = metrics.get("new_duplicated_lines_density", "N/A")
+            if duplication != "N/A":
+                aggregated_metrics["duplication_values"].append(float(duplication.replace("%", "")))
+    
+    # Calculate averages
+    avg_coverage = sum(aggregated_metrics["coverage_values"]) / len(aggregated_metrics["coverage_values"]) if aggregated_metrics["coverage_values"] else 0
+    avg_duplication = sum(aggregated_metrics["duplication_values"]) / len(aggregated_metrics["duplication_values"]) if aggregated_metrics["duplication_values"] else 0
+    
+    return {
+        "new_bugs": aggregated_metrics["new_bugs"],
+        "new_vulnerabilities": aggregated_metrics["new_vulnerabilities"],
+        "new_code_smells": aggregated_metrics["new_code_smells"],
+        "new_security_hotspots": aggregated_metrics["new_security_hotspots"],
+        "new_coverage": f"{avg_coverage:.1f}%" if avg_coverage > 0 else "N/A",
+        "new_duplicated_lines_density": f"{avg_duplication:.1f}%" if avg_duplication > 0 else "N/A",
+        "projects_analyzed": aggregated_metrics["projects_analyzed"]
+    }
+
 def fetch_single_project_metrics(sonar_token, project_key, log_list):
     """
     Fetches specific metrics and ratings for a single SonarCloud project.

@@ -1,0 +1,13 @@
+# JIRA Configuration
+JIRA_URL=https://truxinc.atlassian.net
+JIRA_EMAIL=devops@truxnow.com
+JIRA_TOKEN=ATATT3xFfGF0jW8QvPl3S5MyCZPa1CJt9WmUbTPn0MOr_O5Eh1aePI6tXkdIxrcJKUKa7z7iHLawm3YvYU_zjrAoSPAQkXWZN5V1YekPnBwmjw6tqu_RtmrkDDtnyocECiCBAKN5T6waGfFgm1tRCYfig-xpuO9GvookawoD57V3TRLxQ0qXMvw=0BBD706D
+
+# GitHub Configuration
+GITHUB_ORG=truxinc
+GITHUB_TOKEN=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
+
+# SonarQube Configuration
+SONAR_URL=https://sonarqube.yourcompany.com
+SONAR_TOKEN=2e530c992cce1823f6855c2fbb002f65dd76d383
+SONAR_ORG=truxinc

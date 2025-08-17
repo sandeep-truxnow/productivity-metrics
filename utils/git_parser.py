@@ -1,4 +1,19 @@
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# Create a session with connection pooling and retries
+def _get_optimized_session():
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=2,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 def _get_github_login_from_fullname(github_token, full_name_from_ui, github_org_key, log_list):
     """
@@ -103,21 +118,23 @@ def get_sprint_date_range(
 def fetch_git_metrics_via_api(github_token, developer_name, repos, log_list, github_org_key, sprint_id=None):
     log_list.append(f"[INFO] Git: Starting fetch for developer '{developer_name}' across {len(repos)} repositories in org '{github_org_key}'...")
 
+    # Limit repos for performance (max 3 for individual metrics)
+    repos = repos[:3] if len(repos) > 3 else repos
+    
     github_login = _get_github_login_from_fullname(github_token, developer_name, github_org_key, log_list)
-    # if not github_login:
-    #     log_list.append(f"[ERROR] Git: Cannot proceed with metrics fetch. Could not resolve developer name '{developer_name}' to a GitHub login. Or fetching team metrics.")
-        # return {"error": f"Cannot proceed. Could not resolve developer name '{developer_name}' to GitHub login."}
-
+    
     sprint_start_date, sprint_end_date = _calculate_sprint_dates(sprint_id, log_list)
     if sprint_start_date is None and sprint_end_date is None and sprint_id:
         return {"error": f"Failed to calculate sprint date range for '{sprint_id}'."}
 
     headers = _build_headers(github_token)
     metrics = _initialize_metrics()
+    session = _get_optimized_session()
 
     for repo_full_name in repos:
-        _process_repository(repo_full_name, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list)
+        _process_repository(repo_full_name, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session)
 
+    session.close()
     log_list.append(f"[INFO] Git: Finished processing {len(repos)} repositories. Total commits: {metrics['commits']}")
     return metrics
 
@@ -152,30 +169,34 @@ def _initialize_metrics():
     }
 
 
-def _process_repository(repo_full_name, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list):
+def _process_repository(repo_full_name, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session=None):
+    if session is None:
+        session = requests
     owner_repo = repo_full_name.strip()
     if "/" not in owner_repo or owner_repo.count('/') > 1:
         log_list.append(f"[WARNING] Git: Skipping invalid repo format: '{repo_full_name}'. Expected 'owner/repo-name'.")
         return
 
     # log_list.append(f"[INFO] Git: Processing repo: '{owner_repo}'")
-    _process_pull_requests(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list)
-    _process_commits(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list)
-    get_review_comments_given(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list)
+    _process_pull_requests(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session)
+    _process_commits(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session)
+    get_review_comments_given(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session)
 
 
-def _process_pull_requests(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list):
+def _process_pull_requests(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session=None):
+    if session is None:
+        session = requests
     pr_url = f"https://api.github.com/repos/{owner_repo}/pulls"
-    # pr_params = {"state": "all", "per_page": 100}
+    # Optimize: Reduce per_page and add date filtering
     pr_params = {
         "state": "all",
-        "per_page": 100,
-        "since": sprint_start_date.isoformat() if sprint_start_date else "1970-01-01",
-        "until": sprint_end_date.isoformat() if sprint_end_date else "9999-12-31"
+        "per_page": 50,  # Reduced from 100
+        "sort": "updated",
+        "direction": "desc"
     }
     
     try:
-        pr_resp = requests.get(pr_url, headers=headers, params=pr_params)
+        pr_resp = session.get(pr_url, headers=headers, params=pr_params, timeout=10)
         pr_resp.raise_for_status()
 
         login_to_match = github_login.lower() if github_login else None
@@ -199,44 +220,53 @@ def _process_pull_requests(owner_repo, github_login, headers, sprint_start_date,
         log_list.append(f"[ERROR] Git API PRs Error for {owner_repo}: {e}")
 
 
-def _process_commits(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list):
+def _process_commits(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session=None):
+    if session is None:
+        session = requests
     commits_url = f"https://api.github.com/repos/{owner_repo}/commits"
 
-    # Always fetch all commits (no author filter)
+    # Optimize: Add author filter and limit results
     commits_params = {
-        "per_page": 100,
+        "per_page": 50,  # Reduced from 100
         "since": sprint_start_date.isoformat() if sprint_start_date else "1970-01-01",
         "until": sprint_end_date.isoformat() if sprint_end_date else "9999-12-31"
     }
+    
+    # Add author filter for individual metrics
+    if github_login:
+        commits_params["author"] = github_login
 
     try:
-        commits_resp = requests.get(commits_url, headers=headers, params=commits_params)
+        commits_resp = session.get(commits_url, headers=headers, params=commits_params, timeout=10)
         commits_resp.raise_for_status()
         commits = commits_resp.json()
 
         for commit in commits:
+            # Skip merge commits (individual work only)
+            commit_message = commit.get("commit", {}).get("message", "")
+            if commit_message.lower().startswith("merge") or "merge pull request" in commit_message.lower():
+                continue
+                
             author_data = commit.get("author")
-            # if not author_data:
-            #     log_list.append(f"[INFO] Skipping commit {commit.get('sha')[:7]}: no author info.")
             author_login = author_data.get("login", "").lower() if author_data else ""
             login_to_match = github_login.lower() if github_login else None
 
-            # Always process commit details for team + individual
-            _process_commit_details(owner_repo, commit.get("sha"), headers, metrics, log_list)
-
-            # Count commits
-            if login_to_match:
-                if author_login == login_to_match:
-                    metrics["commits"] += 1
-            else:
-                # Team mode: count all commits
+            # Process commit details only for matching author
+            if login_to_match and author_login == login_to_match:
+                _process_commit_details(owner_repo, commit.get("sha"), headers, metrics, log_list, session)
+                metrics["commits"] += 1
+            elif not login_to_match:
+                # Team mode: process all non-merge commits
+                _process_commit_details(owner_repo, commit.get("sha"), headers, metrics, log_list, session)
                 metrics["commits"] += 1
 
     except requests.exceptions.RequestException as e:
         log_list.append(f"[ERROR] Git API Commits Error for {owner_repo}: {e}")
 
 
-def _process_commit_details(owner_repo, commit_sha, headers, metrics, log_list):
+def _process_commit_details(owner_repo, commit_sha, headers, metrics, log_list, session=None):
+    if session is None:
+        session = requests
     if not commit_sha:
         log_list.append("[WARNING] Skipping commit with empty SHA.")
         return
@@ -244,7 +274,7 @@ def _process_commit_details(owner_repo, commit_sha, headers, metrics, log_list):
     detail_url = f"https://api.github.com/repos/{owner_repo}/commits/{commit_sha}"
     
     try:
-        detail_resp = requests.get(detail_url, headers=headers)
+        detail_resp = session.get(detail_url, headers=headers, timeout=5)
         detail_resp.raise_for_status()
         detail_data = detail_resp.json()
 
@@ -264,7 +294,9 @@ def _process_commit_details(owner_repo, commit_sha, headers, metrics, log_list):
 
 
 
-def get_review_comments_given(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list):
+def get_review_comments_given(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session=None):
+    if session is None:
+        session = requests
     review_comments_url = f"https://api.github.com/repos/{owner_repo}/pulls/comments"
     params = {
         "per_page": 100
@@ -274,7 +306,7 @@ def get_review_comments_given(owner_repo, github_login, headers, sprint_start_da
     login_to_match = github_login.lower() if github_login else None
 
     try:
-        resp = requests.get(review_comments_url, headers=headers, params=params)
+        resp = session.get(review_comments_url, headers=headers, params=params, timeout=10)
         resp.raise_for_status()
 
         comments = resp.json()
