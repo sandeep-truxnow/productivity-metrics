@@ -1,8 +1,9 @@
 from collections import OrderedDict
 from datetime import datetime, date, timedelta
+from typing import Dict, Any
 
 # Duration options similar to trux-jira-metrics
-DETAILED_DURATIONS_DATA = OrderedDict([
+DETAILED_DURATIONS_DATA: Dict[str, Any] = OrderedDict([
     ("Current Sprint", "openSprints()"),
     ("Year to Date", "startOfYear()"),
 ])

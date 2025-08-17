@@ -7,7 +7,7 @@ def _get_optimized_session():
     session = requests.Session()
     retry_strategy = Retry(
         total=2,
-        backoff_factor=0.5,
+        backoff_factor=1,
         status_forcelist=[429, 500, 502, 503, 504]
     )
     adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
@@ -28,7 +28,7 @@ def _get_github_login_from_fullname(github_token, full_name_from_ui, github_org_
 
     # above code return error, AttributeError: 'NoneType' object has no attribute 'lower'
     if not github_token or not full_name_from_ui or not github_org_key:
-        # log_list.append("[ERROR] Git: Missing required parameters for resolving GitHub login.")
+        log_list.append("[ERROR] Git: Missing required parameters for resolving GitHub login.")
         return None
 
     cache_key = f"{full_name_from_ui.lower()}_{github_org_key.lower()}"
@@ -116,12 +116,21 @@ def get_sprint_date_range(
     return target_start_date, target_end_date
 
 def fetch_git_metrics_via_api(github_token, developer_name, repos, log_list, github_org_key, sprint_id=None):
+    """
+    Fetch Git metrics for a developer. If sprint_id is a list, aggregate across multiple sprints.
+    """
+    if isinstance(sprint_id, list):
+        return fetch_git_metrics_for_sprint_range(github_token, developer_name, repos, log_list, github_org_key, sprint_id)
+    
     log_list.append(f"[INFO] Git: Starting fetch for developer '{developer_name}' across {len(repos)} repositories in org '{github_org_key}'...")
+    log_list.append(f"[DEBUG] Git: Token present: {bool(github_token)}, Sprint ID: {sprint_id}")
+    log_list.append(f"[DEBUG] Git: Repositories to process: {repos}")
 
     # Limit repos for performance (max 3 for individual metrics)
     repos = repos[:3] if len(repos) > 3 else repos
     
     github_login = _get_github_login_from_fullname(github_token, developer_name, github_org_key, log_list)
+    log_list.append(f"[DEBUG] Git: Resolved GitHub login: {github_login}")
     
     sprint_start_date, sprint_end_date = _calculate_sprint_dates(sprint_id, log_list)
     if sprint_start_date is None and sprint_end_date is None and sprint_id:
@@ -137,6 +146,25 @@ def fetch_git_metrics_via_api(github_token, developer_name, repos, log_list, git
     session.close()
     log_list.append(f"[INFO] Git: Finished processing {len(repos)} repositories. Total commits: {metrics['commits']}")
     return metrics
+
+def fetch_git_metrics_for_sprint_range(github_token, developer_name, repos, log_list, github_org_key, sprint_ids):
+    """
+    Aggregate Git metrics across multiple sprints.
+    """
+    log_list.append(f"[INFO] Git: Fetching metrics for {len(sprint_ids)} sprints: {sprint_ids}")
+    
+    aggregated_metrics = _initialize_metrics()
+    
+    for sprint_id in sprint_ids:
+        log_list.append(f"[INFO] Git: Processing sprint {sprint_id}")
+        sprint_metrics = fetch_git_metrics_via_api(github_token, developer_name, repos, [], github_org_key, sprint_id)
+        
+        if sprint_metrics and not sprint_metrics.get("error"):
+            for key in ["commits", "lines_added", "lines_deleted", "files_changed", "prs_created", "prs_merged"]:
+                aggregated_metrics[key] += int(sprint_metrics.get(key, 0))
+    
+    log_list.append(f"[INFO] Git: Aggregated metrics across {len(sprint_ids)} sprints")
+    return aggregated_metrics
 
 
 def _calculate_sprint_dates(sprint_id, log_list):

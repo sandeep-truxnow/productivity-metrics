@@ -403,6 +403,12 @@ def summarize_metrics(metrics, issues):
 # --- Function to fetch JIRA metrics for an Individual Developer ---
 # MODIFIED: Added 'headers' variable creation and passing to _process_jira_issues
 def fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id, team_name, log_list):
+    """
+    Fetch JIRA metrics for a developer. If sprint_id is a list, aggregate across multiple sprints.
+    """
+    if isinstance(sprint_id, list):
+        return fetch_jira_metrics_for_sprint_range(jira_email, jira_token, developer_name, sprint_id, team_name, log_list)
+    
     log_list.append(f"[INFO] JIRA: Starting fetch for individual developer '{developer_name}' in sprint '{sprint_id}' for team name '{team_name}'...")
     
     if not jira_email or not jira_token:
@@ -472,6 +478,54 @@ def fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id
 
     # MODIFIED: Pass 'headers' to _process_jira_issues
     return _process_jira_issues(issues, sprint_id, log_list, headers, developer_account_id)
+
+def fetch_jira_metrics_for_sprint_range(jira_email, jira_token, developer_name, sprint_ids, team_name, log_list):
+    """
+    Aggregate JIRA metrics across multiple sprints.
+    """
+    log_list.append(f"[INFO] JIRA: Fetching metrics for {len(sprint_ids)} sprints: {sprint_ids}")
+    
+    aggregated_result = {
+        "all_issues_count": 0,
+        "tickets_closed": 0,
+        "bugs_closed": 0,
+        "story_points_done": 0,
+        "failed_qa_count": 0,
+        "avg_lead_time": 0,
+        "avg_cycle_time": 0,
+        "dev_branches": set()
+    }
+    
+    lead_times = []
+    cycle_times = []
+    
+    for sprint_id in sprint_ids:
+        log_list.append(f"[INFO] JIRA: Processing sprint {sprint_id}")
+        sprint_result = fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id, team_name, [])
+        
+        if sprint_result and not sprint_result.get("error"):
+            aggregated_result["all_issues_count"] += int(sprint_result.get("all_issues_count", 0))
+            aggregated_result["tickets_closed"] += int(sprint_result.get("tickets_closed", 0))
+            aggregated_result["bugs_closed"] += int(sprint_result.get("bugs_closed", 0))
+            aggregated_result["story_points_done"] += int(sprint_result.get("story_points_done", 0))
+            aggregated_result["failed_qa_count"] += int(sprint_result.get("failed_qa_count", 0))
+            
+            avg_lead_time = sprint_result.get("avg_lead_time", 0)
+            if isinstance(avg_lead_time, (int, float)) and avg_lead_time > 0:
+                lead_times.append(float(avg_lead_time))
+            avg_cycle_time = sprint_result.get("avg_cycle_time", 0)
+            if isinstance(avg_cycle_time, (int, float)) and avg_cycle_time > 0:
+                cycle_times.append(float(avg_cycle_time))
+            
+            if "dev_branches" in sprint_result:
+                aggregated_result["dev_branches"].update(sprint_result["dev_branches"])
+    
+    aggregated_result["avg_lead_time"] = sum(lead_times) / len(lead_times) if lead_times else 0
+    aggregated_result["avg_cycle_time"] = sum(cycle_times) / len(cycle_times) if cycle_times else 0
+    aggregated_result["dev_branches"] = list(aggregated_result["dev_branches"])
+    
+    log_list.append(f"[INFO] JIRA: Aggregated metrics across {len(sprint_ids)} sprints")
+    return aggregated_result
 
 
 # --- New: Function to fetch JIRA metrics for a Team ---

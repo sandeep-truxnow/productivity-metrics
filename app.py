@@ -189,22 +189,35 @@ with st.sidebar:
                     if not developer_team:
                         developer_team = "Unknown"
                     
-                    # Get sprint info
-                    sprint_name, sprint_start_date, sprint_end_date = show_sprint_name_start_date_and_end_date(
-                        st.session_state.selected_duration_name, st.session_state.log_messages
-                    )
+                    # Get sprint info - handle multi-sprint selections
+                    if st.session_state.selected_duration_name.startswith("Sprint "):
+                        sprint_name, sprint_start_date, sprint_end_date = show_sprint_name_start_date_and_end_date(
+                            st.session_state.selected_duration_name, st.session_state.log_messages
+                        )
+                        sprint_ids = sprint_name  # Single sprint ID
+                    else:
+                        if st.session_state.num_previous_sprints > 1:
+                            from common import get_previous_n_sprints
+                            sprint_ids = get_previous_n_sprints(st.session_state.num_previous_sprints)
+                            sprint_name = f"Last {st.session_state.num_previous_sprints} Sprints"
+                            sprint_start_date, sprint_end_date = None, None  # Will be calculated per sprint
+                        else:
+                            sprint_name, sprint_start_date, sprint_end_date = show_sprint_name_start_date_and_end_date(
+                                "Current Sprint", st.session_state.log_messages
+                            )
+                            sprint_ids = sprint_name
                     
                     # Store sprint dates in session state for header display
                     st.session_state.current_sprint_name = sprint_name
                     st.session_state.current_sprint_start = sprint_start_date
                     st.session_state.current_sprint_end = sprint_end_date
                     
-                    # JIRA Metrics
+                    # JIRA Metrics - pass sprint_ids (can be single sprint or list)
                     st.session_state.jira_result_individual = fetch_jira_metrics_via_api(
                         JIRA_CONFIG["email"],
                         JIRA_CONFIG["token"],
                         st.session_state.selected_developer_name,
-                        sprint_name,
+                        sprint_ids,
                         developer_team,
                         st.session_state.log_messages
                     )
@@ -247,7 +260,7 @@ with st.sidebar:
                                     list(jira_repos),
                                     [],  # Empty log list for thread safety
                                     GITHUB_CONFIG["org"],
-                                    sprint_id=sprint_name
+                                    sprint_id=sprint_ids
                                 )
                                 
                                 individual_metrics = {
@@ -501,36 +514,36 @@ if st.session_state.user_authenticated:
                             st.warning(f"⚠️ No SonarCloud project found for key: {project_key}")
                             st.info("No SonarQube data available for this repository")
                         else:
-                            # Create quality comparison table
+                            # Create quality comparison table with proper data types
                             quality_data = [
                                 {
                                     "Category": "Bugs",
-                                    "New Code": new_code_metrics.get("new_bugs", 0),
-                                    "Overall": overall_metrics.get("bugs", "N/A")
+                                    "New Code": str(new_code_metrics.get("new_bugs", 0)),
+                                    "Overall": str(overall_metrics.get("bugs", "N/A"))
                                 },
                                 {
                                     "Category": "Vulnerabilities",
-                                    "New Code": new_code_metrics.get("new_vulnerabilities", 0),
-                                    "Overall": overall_metrics.get("vulnerabilities", "N/A")
+                                    "New Code": str(new_code_metrics.get("new_vulnerabilities", 0)),
+                                    "Overall": str(overall_metrics.get("vulnerabilities", "N/A"))
                                 },
                                 {
                                     "Category": "Code Smells",
-                                    "New Code": new_code_metrics.get("new_code_smells", 0),
-                                    "Overall": overall_metrics.get("code_smells", "N/A")
+                                    "New Code": str(new_code_metrics.get("new_code_smells", 0)),
+                                    "Overall": str(overall_metrics.get("code_smells", "N/A"))
                                 },
                                 {
                                     "Category": "Security Hotspots",
-                                    "New Code": new_code_metrics.get("new_security_hotspots", 0),
+                                    "New Code": str(new_code_metrics.get("new_security_hotspots", 0)),
                                     "Overall": "N/A"
                                 },
                                 {
                                     "Category": "Coverage",
-                                    "New Code": new_code_metrics.get("new_coverage", "N/A"),
+                                    "New Code": str(new_code_metrics.get("new_coverage", "N/A")),
                                     "Overall": f"{overall_metrics.get('coverage', 0)}%" if overall_metrics.get('coverage') != "N/A" else "N/A"
                                 },
                                 {
                                     "Category": "Duplication",
-                                    "New Code": new_code_metrics.get("new_duplicated_lines_density", "N/A"),
+                                    "New Code": str(new_code_metrics.get("new_duplicated_lines_density", "N/A")),
                                     "Overall": f"{overall_metrics.get('duplicated_lines_density', 0)}%" if overall_metrics.get('duplicated_lines_density') != "N/A" else "N/A"
                                 }
                             ]
