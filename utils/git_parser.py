@@ -17,7 +17,7 @@ def _get_optimized_session():
 
 def _get_github_login_from_fullname(github_token, full_name_from_ui, github_org_key, log_list):
     """
-    Fetches organization members and their full names to find a matching GitHub login.
+    Resolves developer full names to GitHub usernames using GitHub's search users API.
     Returns the GitHub login (username) if found, otherwise None.
     Caches the mapping to avoid repeated API calls within the same session.
     """
@@ -26,68 +26,40 @@ def _get_github_login_from_fullname(github_token, full_name_from_ui, github_org_
     if not hasattr(_get_github_login_from_fullname, 'cache'):
         _get_github_login_from_fullname.cache = {}
 
-    # above code return error, AttributeError: 'NoneType' object has no attribute 'lower'
-    if not github_token or not full_name_from_ui or not github_org_key:
-        log_list.append("[ERROR] Git: Missing required parameters for resolving GitHub login.")
+    if not full_name_from_ui:
+        log_list.append("[ERROR] Git: Missing developer name for resolving GitHub login.")
         return None
 
-    cache_key = f"{full_name_from_ui.lower()}_{github_org_key.lower()}"
+    cache_key = f"{full_name_from_ui.lower()}"
 
     if cache_key in _get_github_login_from_fullname.cache:
         log_list.append(f"[INFO] Git: Resolved '{full_name_from_ui}' from cache to login '{_get_github_login_from_fullname.cache[cache_key]}'.")
         return _get_github_login_from_fullname.cache[cache_key]
 
-    log_list.append(f"[INFO] Git: Attempting to resolve developer '{full_name_from_ui}' to GitHub login in organization '{github_org_key}'. (API call)")
+    log_list.append(f"[INFO] Git: Attempting to resolve developer '{full_name_from_ui}' to GitHub login using search API.")
     
-    headers = {
-        "Authorization": f"Bearer {github_token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28"
-    }
-    base_api_url = "https://api.github.com"
-
-    members_url = f"{base_api_url}/orgs/{github_org_key}/members"
-    members_params = {"per_page": 100} # Max per_page. Need pagination for very large orgs.
+    search_query = full_name_from_ui.replace(" ", "+")
+    search_url = f"https://api.github.com/search/users?q={search_query}"
 
     try:
-        members_resp = requests.get(members_url, headers=headers, params=members_params)
-        members_resp.raise_for_status()
-        members_list = members_resp.json()
-        log_list.append(f"[INFO] Git API: Fetched {len(members_list)} members for '{github_org_key}'.")
-
-        fullname_to_login_map = {}
-        for member in members_list:
-            login = member.get('login')
-            if login:
-                user_detail_url = f"{base_api_url}/users/{login}"
-                user_detail_resp = requests.get(user_detail_url, headers=headers)
-                user_detail_resp.raise_for_status()
-                user_data = user_detail_resp.json()
-                
-                user_fullname = user_data.get('name') # 'name' field is the full name
-                if user_fullname:
-                    fullname_to_login_map[user_fullname.lower()] = login
-                    # For cases where developer_name is actually the GitHub login
-                    fullname_to_login_map[login.lower()] = login
-                    # log_list.append(f"[DEBUG] Git: Mapped '{user_fullname.lower()}' to login '{login}'.")
-                else:
-                    # If full name is not set, map by login only
-                    fullname_to_login_map[login.lower()] = login
-
-
-        resolved_login = fullname_to_login_map.get(full_name_from_ui.lower())
+        search_resp = requests.get(search_url, timeout=10)
+        search_resp.raise_for_status()
+        search_data = search_resp.json()
         
-        if resolved_login:
-            log_list.append(f"[INFO] Git: Successfully resolved '{full_name_from_ui}' to GitHub login '{resolved_login}'.")
-            _get_github_login_from_fullname.cache[cache_key] = resolved_login # Cache the result
-            return resolved_login
-        else:
-            log_list.append(f"[WARNING] Git: Could not resolve '{full_name_from_ui}' to a GitHub login in organization '{github_org_key}'. Ensure name matches exactly or developer is a member.")
-            _get_github_login_from_fullname.cache[cache_key] = None # Cache failure
-            return None
+        items = search_data.get('items', [])
+        if items:
+            resolved_login = items[0].get('login')
+            if resolved_login:
+                log_list.append(f"[INFO] Git: Successfully resolved '{full_name_from_ui}' to GitHub login '{resolved_login}' via search API.")
+                _get_github_login_from_fullname.cache[cache_key] = resolved_login # Cache the result
+                return resolved_login
+        
+        log_list.append(f"[WARNING] Git: Could not resolve '{full_name_from_ui}' to a GitHub login via search API. No matching users found.")
+        _get_github_login_from_fullname.cache[cache_key] = None # Cache failure
+        return None
 
     except requests.exceptions.RequestException as e:
-        error_msg = f"Git API: Error fetching organization members or user details for '{github_org_key}': {e}"
+        error_msg = f"Git API: Error searching for GitHub user '{full_name_from_ui}': {e}"
         log_list.append(f"[ERROR] {error_msg}")
         _get_github_login_from_fullname.cache[cache_key] = None # Cache failure
         return None
@@ -133,8 +105,10 @@ def fetch_git_metrics_via_api(github_token, developer_name, repos, log_list, git
     log_list.append(f"[DEBUG] Git: Resolved GitHub login: {github_login}")
     
     sprint_start_date, sprint_end_date = _calculate_sprint_dates(sprint_id, log_list)
+    
     if sprint_start_date is None and sprint_end_date is None and sprint_id:
-        return {"error": f"Failed to calculate sprint date range for '{sprint_id}'."}
+        if isinstance(sprint_id, str) and (sprint_id.replace(".", "").replace("-", "").isdigit()):
+            return {"error": f"Failed to calculate sprint date range for '{sprint_id}'."}
 
     headers = _build_headers(github_token)
     metrics = _initialize_metrics()
@@ -170,6 +144,12 @@ def fetch_git_metrics_for_sprint_range(github_token, developer_name, repos, log_
 def _calculate_sprint_dates(sprint_id, log_list):
     if not sprint_id:
         return None, None
+    
+    if isinstance(sprint_id, str) and not sprint_id.replace(".", "").replace("-", "").isdigit():
+        log_list.append(f"[INFO] Git: Using date-based filtering for duration '{sprint_id}' instead of sprint-specific dates.")
+        # For non-numeric sprint IDs, return None to use broader date filtering
+        return None, None
+    
     try:
         return get_sprint_date_range(sprint_id)
     except Exception as e:
