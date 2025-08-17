@@ -1,44 +1,24 @@
 import requests
 
-def _get_github_login_from_fullname(github_token, full_name_from_ui, github_org_key, log_list):
+def _fetch_org_members_mapping(github_token, github_org_key, log_list):
     """
-    Fetches organization members and their full names to find a matching GitHub login.
-    Returns the GitHub login (username) if found, otherwise None.
-    Caches the mapping to avoid repeated API calls within the same session.
+    Fetches all organization members and builds a mapping from full names to GitHub logins.
+    This is called once per organization per session to minimize API calls.
     """
-    # Use a simple in-memory cache for this helper function to reduce redundant API calls
-    # within the same application run.
-    if not hasattr(_get_github_login_from_fullname, 'cache'):
-        _get_github_login_from_fullname.cache = {}
-
-    # above code return error, AttributeError: 'NoneType' object has no attribute 'lower'
-    if not github_token or not full_name_from_ui or not github_org_key:
-        # log_list.append("[ERROR] Git: Missing required parameters for resolving GitHub login.")
-        return None
-
-    cache_key = f"{full_name_from_ui.lower()}_{github_org_key.lower()}"
-
-    if cache_key in _get_github_login_from_fullname.cache:
-        log_list.append(f"[INFO] Git: Resolved '{full_name_from_ui}' from cache to login '{_get_github_login_from_fullname.cache[cache_key]}'.")
-        return _get_github_login_from_fullname.cache[cache_key]
-
-    log_list.append(f"[INFO] Git: Attempting to resolve developer '{full_name_from_ui}' to GitHub login in organization '{github_org_key}'. (API call)")
-    
     headers = {
         "Authorization": f"Bearer {github_token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28"
     }
     base_api_url = "https://api.github.com"
-
     members_url = f"{base_api_url}/orgs/{github_org_key}/members"
-    members_params = {"per_page": 100} # Max per_page. Need pagination for very large orgs.
+    members_params = {"per_page": 100}
 
     try:
         members_resp = requests.get(members_url, headers=headers, params=members_params)
         members_resp.raise_for_status()
         members_list = members_resp.json()
-        log_list.append(f"[INFO] Git API: Fetched {len(members_list)} members for '{github_org_key}'.")
+        log_list.append(f"[INFO] Git API: Fetched {len(members_list)} members for '{github_org_key}' (building org cache).")
 
         fullname_to_login_map = {}
         for member in members_list:
@@ -49,32 +29,55 @@ def _get_github_login_from_fullname(github_token, full_name_from_ui, github_org_
                 user_detail_resp.raise_for_status()
                 user_data = user_detail_resp.json()
                 
-                user_fullname = user_data.get('name') # 'name' field is the full name
+                user_fullname = user_data.get('name')
                 if user_fullname:
                     fullname_to_login_map[user_fullname.lower()] = login
-                    # For cases where developer_name is actually the GitHub login
                     fullname_to_login_map[login.lower()] = login
-                    # log_list.append(f"[DEBUG] Git: Mapped '{user_fullname.lower()}' to login '{login}'.")
                 else:
-                    # If full name is not set, map by login only
                     fullname_to_login_map[login.lower()] = login
 
-
-        resolved_login = fullname_to_login_map.get(full_name_from_ui.lower())
-        
-        if resolved_login:
-            log_list.append(f"[INFO] Git: Successfully resolved '{full_name_from_ui}' to GitHub login '{resolved_login}'.")
-            _get_github_login_from_fullname.cache[cache_key] = resolved_login # Cache the result
-            return resolved_login
-        else:
-            log_list.append(f"[WARNING] Git: Could not resolve '{full_name_from_ui}' to a GitHub login in organization '{github_org_key}'. Ensure name matches exactly or developer is a member.")
-            _get_github_login_from_fullname.cache[cache_key] = None # Cache failure
-            return None
+        log_list.append(f"[INFO] Git: Built organization member mapping with {len(fullname_to_login_map)} entries for '{github_org_key}'.")
+        return fullname_to_login_map
 
     except requests.exceptions.RequestException as e:
-        error_msg = f"Git API: Error fetching organization members or user details for '{github_org_key}': {e}"
+        error_msg = f"Git API: Error fetching organization members for '{github_org_key}': {e}"
         log_list.append(f"[ERROR] {error_msg}")
-        _get_github_login_from_fullname.cache[cache_key] = None # Cache failure
+        return {}
+
+
+def _get_github_login_from_fullname(github_token, full_name_from_ui, github_org_key, log_list):
+    """
+    Fetches organization members and their full names to find a matching GitHub login.
+    Returns the GitHub login (username) if found, otherwise None.
+    Uses session-level caching to avoid repeated API calls for the same organization.
+    """
+    if not hasattr(_get_github_login_from_fullname, 'org_cache'):
+        _get_github_login_from_fullname.org_cache = {}
+
+    if not github_token or not full_name_from_ui or not github_org_key:
+        return None
+
+    org_cache_key = f"{github_org_key.lower()}"
+    
+    if org_cache_key not in _get_github_login_from_fullname.org_cache:
+        log_list.append(f"[INFO] Git: Building organization member cache for '{github_org_key}'...")
+        _get_github_login_from_fullname.org_cache[org_cache_key] = _fetch_org_members_mapping(
+            github_token, github_org_key, log_list
+        )
+
+    fullname_to_login_map = _get_github_login_from_fullname.org_cache[org_cache_key]
+    
+    if not fullname_to_login_map:
+        log_list.append(f"[ERROR] Git: No organization member mapping available for '{github_org_key}'.")
+        return None
+
+    resolved_login = fullname_to_login_map.get(full_name_from_ui.lower())
+    
+    if resolved_login:
+        log_list.append(f"[INFO] Git: Successfully resolved '{full_name_from_ui}' to GitHub login '{resolved_login}' (from org cache).")
+        return resolved_login
+    else:
+        log_list.append(f"[WARNING] Git: Could not resolve '{full_name_from_ui}' to a GitHub login in organization '{github_org_key}'. Ensure name matches exactly or developer is a member.")
         return None
 
 from datetime import datetime, timedelta
