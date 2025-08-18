@@ -297,14 +297,16 @@ with st.sidebar:
                                 return {
                                     **individual_metrics,
                                     "individual_work": individual_metrics,
-                                    "managerial_work": managerial_metrics
+                                    "managerial_work": managerial_metrics,
+                                    "files_by_repo": git_result.get("files_by_repo", {})
                                 }
                             else:
                                 return {
                                     "commits": 0, "prs_created": 0, "prs_merged": 0,
                                     "lines_added": 0, "lines_deleted": 0, "files_changed": 0,
                                     "individual_work": {"commits": 0, "prs_created": 0, "prs_merged": 0, "lines_added": 0, "lines_deleted": 0, "files_changed": 0},
-                                    "managerial_work": {"prs_approved": 0, "code_reviews": 0}
+                                    "managerial_work": {"prs_approved": 0, "code_reviews": 0},
+                                    "files_by_repo": {}
                                 }
                         
                         def fetch_sonar_metrics():
@@ -410,9 +412,9 @@ if st.session_state.user_authenticated:
         
         # Summary Cards with team comparison if enabled
         if st.session_state.include_team_metrics:
-            st.markdown("### 📊 Key Performance Indicators (Individual / Team)")
+            st.markdown("### Key Performance Indicators (Individual / Team)")
         else:
-            st.markdown("### 📊 Key Performance Indicators")
+            st.markdown("### Key Performance Indicators")
         
         if st.session_state.include_team_metrics:
             # Show individual/team comparison
@@ -583,26 +585,26 @@ if st.session_state.user_authenticated:
                     }])
                 st.dataframe(git_df, hide_index=True, use_container_width=True)
                 
-                # Managerial work section
-                st.subheader("👥 Code Review Work")
-                managerial_work = git_data.get("managerial_work", {})
-                if st.session_state.include_team_metrics:
-                    mgmt_df = pd.DataFrame([{
-                        "Metric": "Code Reviews Given",
-                        "Value": f"{managerial_work.get('code_reviews', 0)} / {managerial_work.get('code_reviews', 0) * 5}"
-                    }, {
-                        "Metric": "PRs Approved",
-                        "Value": f"{managerial_work.get('prs_approved', 0)} / {managerial_work.get('prs_approved', 0) * 5}"
-                    }])
-                else:
-                    mgmt_df = pd.DataFrame([{
-                        "Metric": "Code Reviews Given",
-                        "Value": str(managerial_work.get("code_reviews", 0))
-                    }, {
-                        "Metric": "PRs Approved",
-                        "Value": str(managerial_work.get("prs_approved", 0))
-                    }])
-                st.dataframe(mgmt_df, hide_index=True, use_container_width=True)
+                # # Managerial work section
+                # st.subheader("👥 Code Review Work")
+                # managerial_work = git_data.get("managerial_work", {})
+                # if st.session_state.include_team_metrics:
+                #     mgmt_df = pd.DataFrame([{
+                #         "Metric": "Code Reviews Given",
+                #         "Value": f"{managerial_work.get('code_reviews', 0)} / {managerial_work.get('code_reviews', 0) * 5}"
+                #     }, {
+                #         "Metric": "PRs Approved",
+                #         "Value": f"{managerial_work.get('prs_approved', 0)} / {managerial_work.get('prs_approved', 0) * 5}"
+                #     }])
+                # else:
+                #     mgmt_df = pd.DataFrame([{
+                #         "Metric": "Code Reviews Given",
+                #         "Value": str(managerial_work.get("code_reviews", 0))
+                #     }, {
+                #         "Metric": "PRs Approved",
+                #         "Value": str(managerial_work.get("prs_approved", 0))
+                #     }])
+                # st.dataframe(mgmt_df, hide_index=True, use_container_width=True)
             else:
                 st.error("Failed to fetch Git metrics")
 
@@ -702,6 +704,31 @@ if st.session_state.user_authenticated:
                             
                             quality_df = pd.DataFrame(quality_data)
                             st.dataframe(quality_df, hide_index=True, use_container_width=True)
+                            
+                            # Add files changed section
+                            st.markdown("**📄 Files Changed in this Repository:**")
+                            
+                            # Get files changed from git data for this repo
+                            git_data = st.session_state.get('git_metrics_individual', {})
+                            files_by_repo = git_data.get('files_by_repo', {})
+                            
+                            # Match repo name (handle both full path and repo name only)
+                            repo_key = None
+                            for key in files_by_repo.keys():
+                                if key == repo or key.endswith(f"/{repo}"):
+                                    repo_key = key
+                                    break
+                            
+                            if repo_key and files_by_repo[repo_key]:
+                                repo_files = files_by_repo[repo_key]
+                                for file in repo_files[:10]:  # Limit to first 10 files
+                                    st.text(f"• {file}")
+                                if len(repo_files) > 10:
+                                    st.text(f"... and {len(repo_files) - 10} more files")
+                            elif git_data.get('mock_data', False):
+                                st.info("No file change data available (using mock data)")
+                            else:
+                                st.info("No file change data found for this repository")
 
 
         st.subheader("")
@@ -734,21 +761,13 @@ if st.session_state.user_authenticated:
                 sprint_performance = []
                 all_sprints = []
                 
+                # Force include current sprint 2025.16
+                all_sprints.append('2025.16')
+                
                 # Get sprints from duration dropdown
                 previous_sprints = get_previous_n_sprints(st.session_state.num_previous_sprints)
-                detailed_durations_with_sprints = DETAILED_DURATIONS_DATA.copy()
                 for sprint in previous_sprints:
-                    detailed_durations_with_sprints[f"Sprint {sprint}"] = sprint
-                
-                # Extract sprint names from dropdown options
-                for duration_name in detailed_durations_with_sprints.keys():
-                    if duration_name.startswith("Sprint "):
-                        sprint_name = duration_name.replace("Sprint ", "")
-                        all_sprints.append(sprint_name)
-                    elif duration_name == "Current Sprint":
-                        current_sprint_name = st.session_state.get('current_sprint_name', 'Current')
-                        if current_sprint_name != 'Current':
-                            all_sprints.append(current_sprint_name)
+                    all_sprints.append(sprint)
                 
                 # Sort sprints in descending order (newest first)
                 all_sprints = sorted(set(all_sprints), reverse=True)
@@ -1046,21 +1065,13 @@ if st.session_state.user_authenticated:
                 sprint_performance = []
                 all_sprints = []
                 
+                # Force include current sprint 2025.16
+                all_sprints.append('2025.16')
+                
                 # Get sprints from duration dropdown
                 previous_sprints = get_previous_n_sprints(st.session_state.num_previous_sprints)
-                detailed_durations_with_sprints = DETAILED_DURATIONS_DATA.copy()
                 for sprint in previous_sprints:
-                    detailed_durations_with_sprints[f"Sprint {sprint}"] = sprint
-                
-                # Extract sprint names from dropdown options
-                for duration_name in detailed_durations_with_sprints.keys():
-                    if duration_name.startswith("Sprint "):
-                        sprint_name = duration_name.replace("Sprint ", "")
-                        all_sprints.append(sprint_name)
-                    elif duration_name == "Current Sprint":
-                        current_sprint_name = st.session_state.get('current_sprint_name', 'Current')
-                        if current_sprint_name != 'Current':
-                            all_sprints.append(current_sprint_name)
+                    all_sprints.append(sprint)
                 
                 # Sort sprints in descending order (newest first)
                 all_sprints = sorted(set(all_sprints), reverse=True)
@@ -1070,24 +1081,25 @@ if st.session_state.user_authenticated:
                 current_failed_qa = jira_data.get("failed_qa_count", 0)
                 current_story_points = jira_data.get("story_points_done", 0)
                 
-                # Add data for each sprint
+                # Determine selected sprint for highlighting
+                selected_sprint = None
+                if st.session_state.selected_duration_name == "Current Sprint":
+                    selected_sprint = st.session_state.get('current_sprint_name')
+                elif st.session_state.selected_duration_name.startswith("Sprint "):
+                    selected_sprint = st.session_state.selected_duration_name.replace("Sprint ", "")
+                
+                # Add data for each sprint (always show all sprints)
                 for i, sprint in enumerate(all_sprints):
-                    if (st.session_state.selected_duration_name == "Current Sprint" and 
-                        sprint == st.session_state.get('current_sprint_name')) or \
-                    (st.session_state.selected_duration_name == f"Sprint {sprint}"):
-                        # Use actual current data
+                    is_selected = (sprint == selected_sprint)
+                    
+                    if is_selected:
+                        # Use actual data for selected sprint
                         planned_issues = jira_data.get("all_issues_count", 0)
                         delivered_issues = jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0)
-                        
-                        sprint_performance.append({
-                            "Sprint": str(sprint),
-                            "Planned Issues": planned_issues,
-                            "Delivered Issues": delivered_issues,
-                            "Completion Rate": current_completion_rate,
-                            "Failed QA Count": current_failed_qa,
-                            "Planned Story Points": planned_issues * 3,
-                            "Delivered Story Points": current_story_points
-                        })
+                        completion_rate = current_completion_rate
+                        failed_qa = current_failed_qa
+                        planned_sp = planned_issues * 3
+                        delivered_sp = current_story_points
                     else:
                         # Simulate data for other sprints
                         planned_issues = max(5, jira_data.get("all_issues_count", 5) + (i-1)*2)
@@ -1096,16 +1108,17 @@ if st.session_state.user_authenticated:
                         failed_qa = max(0, current_failed_qa + (i-1)*1)
                         planned_sp = planned_issues * 3
                         delivered_sp = max(0, planned_sp - (i*2))
-                        
-                        sprint_performance.append({
-                            "Sprint": str(sprint),
-                            "Planned Issues": planned_issues,
-                            "Delivered Issues": delivered_issues,
-                            "Completion Rate": completion_rate,
-                            "Failed QA Count": failed_qa,
-                            "Planned Story Points": planned_sp,
-                            "Delivered Story Points": delivered_sp
-                        })
+                    
+                    sprint_performance.append({
+                        "Sprint": str(sprint),
+                        "_selected": is_selected,
+                        "Planned Issues": planned_issues,
+                        "Delivered Issues": delivered_issues,
+                        "Completion Rate": completion_rate,
+                        "Failed QA Count": failed_qa,
+                        "Planned Story Points": planned_sp,
+                        "Delivered Story Points": delivered_sp
+                    })
                 
                 if sprint_performance:
                     # Performance summary table (descending order - newest first)
@@ -1120,7 +1133,16 @@ if st.session_state.user_authenticated:
                         perf_df['Failed QA Count'] = perf_df['Failed QA Count'].apply(lambda x: f"{x} / {x * 2}")
                     
                     perf_df['Completion Rate'] = perf_df['Completion Rate'].apply(lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) else x)
-                    st.dataframe(perf_df, hide_index=True, use_container_width=True)
+                    
+                    # Apply row highlighting for selected sprint
+                    def highlight_selected(row):
+                        if row.get('_selected', False):
+                            return ['background-color: lightblue'] * len(row)
+                        return [''] * len(row)
+                    
+                    # Remove helper column and display with styling
+                    display_df = perf_df.drop(columns=['_selected'])
+                    st.dataframe(display_df.style.apply(highlight_selected, axis=1), hide_index=True, use_container_width=True)
                 else:
                     st.info("No sprint performance data available")
         

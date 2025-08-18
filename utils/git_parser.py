@@ -203,6 +203,7 @@ def _initialize_metrics():
         "files_changed": 0,
         "prs_created": 0,
         "prs_merged": 0,
+        "files_by_repo": {},  # Track files changed by repository
         # "review_comments_given": 0
     }
 
@@ -216,9 +217,16 @@ def _process_repository(repo_full_name, github_login, headers, sprint_start_date
         return
 
     log_list.append(f"[INFO] Git: Processing repo: '{owner_repo}' for user: {github_login or 'team-mode'}")
+    
+    # Initialize files list for this repo
+    metrics["files_by_repo"][owner_repo] = set()
+    
     _process_pull_requests(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session)
     _process_commits(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session)
     get_review_comments_given(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session)
+    
+    # Convert set to sorted list for consistent display
+    metrics["files_by_repo"][owner_repo] = sorted(list(metrics["files_by_repo"][owner_repo]))
 
 
 def _process_pull_requests(owner_repo, github_login, headers, sprint_start_date, sprint_end_date, metrics, log_list, session=None):
@@ -344,6 +352,16 @@ def _process_commit_details(owner_repo, commit_sha, headers, metrics, log_list, 
             metrics["lines_added"] += int(stats.get("additions", 0))
             metrics["lines_deleted"] += int(stats.get("deletions", 0))
             metrics["files_changed"] += len(files)
+            
+            # Track files changed by repository
+            if owner_repo not in metrics["files_by_repo"]:
+                metrics["files_by_repo"][owner_repo] = set()
+            
+            for file_info in files:
+                filename = file_info.get("filename")
+                if filename:
+                    metrics["files_by_repo"][owner_repo].add(filename)
+                    
         except Exception as e:
             log_list.append(f"[ERROR] Metric update error for commit {commit_sha[:7]}: {e}")
 
@@ -436,9 +454,21 @@ def _get_mock_git_metrics(developer_name, log_list):
     
     log_list.append(f"[INFO] Git: Mock data generated - {commits} commits, {prs_created} PRs created")
     
+    # Generate mock files for demonstration
+    mock_files = {
+        "truxinc/sample-repo": [
+            "src/main/java/com/example/Service.java",
+            "src/test/java/com/example/ServiceTest.java",
+            "README.md",
+            "pom.xml",
+            "src/main/resources/application.yml"
+        ]
+    }
+    
     return {
         **individual_metrics,
         "individual_work": individual_metrics,
         "managerial_work": managerial_metrics,
+        "files_by_repo": mock_files,
         "mock_data": True
     }
