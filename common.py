@@ -101,8 +101,9 @@ def get_sprint_for_date(target_date, base_sprint="2025.12", base_start_date_str=
 def show_sprint_name_start_date_and_end_date(duration_name, log_list):
     """Get sprint details based on duration selection"""
     if duration_name == "Current Sprint":
-        today_str = date.today().strftime("%Y-%m-%d")
-        return get_sprint_for_date(today_str)
+        return "openSprints()", date.today(), date.today()
+    elif duration_name == "Year to Date":
+        return "startOfYear()", date(date.today().year, 1, 1), date.today()
     elif duration_name.startswith("Sprint "):
         sprint_name = duration_name.replace("Sprint ", "")
         sprint_start_date, sprint_end_date = get_sprint_dates_from_name(sprint_name)

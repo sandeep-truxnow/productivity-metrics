@@ -275,16 +275,25 @@ def get_logged_time(histories, log_list, developer_account_id=None):
 # MODIFIED: Added 'headers' parameter
 def _process_jira_issues(issues, sprint_id, log_list, headers, developer_account_id=None):
     metrics = initialize_metrics()
-
+    log_list.append(f"[DEBUG] Processing {len(issues)} issues with sprint_id: {sprint_id}")
+    
+    filtered_count = 0
     for issue in issues:
         if sprint_id and not _filter_issues_by_sprint(issue, sprint_id):
+            log_list.append(f"[DEBUG] Issue {issue.get('key')} filtered out (not in sprint {sprint_id})")
             continue
+        filtered_count += 1
         _update_metrics(issue, metrics, headers, log_list, developer_account_id)
-
+    
+    log_list.append(f"[DEBUG] {filtered_count} issues passed sprint filter")
     return summarize_metrics(metrics, issues)
 
 
 def _filter_issues_by_sprint(issue, sprint_id):
+    # Skip filtering for openSprints() and startOfYear() - they're handled by JQL
+    if sprint_id in ["openSprints()", "startOfYear()"]:
+        return True
+        
     issue_sprints = issue.get("fields", {}).get("customfield_10010", [])
     return any(
         sprint_id.lower() in str(s.get("name", "")).lower() or sprint_id == str(s.get("id", ""))
@@ -303,10 +312,15 @@ def _update_metrics(issue, metrics, headers, log_list, developer_account_id=None
     _process_dev_panel(issue, headers, log_list, metrics["dev_branches"])
 
     value = issue.get("fields", {}).get("customfield_10014")
+    issue_key = issue.get("key", "Unknown")
     try:
-        metrics["story_points"] += float(value)
+        points = float(value) if value is not None else 0.0
+        metrics["story_points"] += points
+        if points > 0:
+            log_list.append(f"[DEBUG] JIRA: Added {points} story points from issue {issue_key}")
     except (TypeError, ValueError):
         metrics["story_points"] += 0.0
+        log_list.append(f"[DEBUG] JIRA: No story points for issue {issue_key} (value: {value})")
 
     _update_closure_metrics(issue, metrics)
     in_progress_date, done_date = _calculate_times(changelog)
@@ -386,7 +400,7 @@ def initialize_metrics():
 
 
 def summarize_metrics(metrics, issues):
-    return {
+    result = {
         "all_issues_count": len(issues),
         "story_points_done": metrics["story_points"],
         "tickets_closed": metrics["tickets_closed"],
@@ -398,6 +412,9 @@ def summarize_metrics(metrics, issues):
         "failed_qa_count": metrics["failed_qa_count"],
         "logged_time": metrics["logged_time"],
     }
+    # Debug final story points
+    print(f"[DEBUG] Final story points calculation: {metrics['story_points']} from {len(issues)} issues")
+    return result
 
 
 # --- Function to fetch JIRA metrics for an Individual Developer ---
@@ -419,7 +436,12 @@ def fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id
     # Construct JQL query for individual developer
     jql_parts = [f'assignee="{developer_name}"']
     if sprint_id:
-        jql_parts.append(f'sprint = "{team_name} {sprint_id}"') # Adjust JQL for sprint if needed (e.g., openSprints())
+        if sprint_id == "openSprints()":
+            jql_parts.append("sprint in openSprints()")
+        elif sprint_id == "startOfYear()":
+            jql_parts.append("created >= startOfYear()")
+        else:
+            jql_parts.append(f'sprint = "{team_name} {sprint_id}"')
 
     
     jql = " AND ".join(jql_parts)
@@ -433,7 +455,9 @@ def fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id
     }
 
     try:
-        # log_list.append(f"[INFO] JIRA individual API: GET {url} \n Headers: {headers} \n Params: {params}")
+        log_list.append(f"[INFO] JIRA individual API: GET {url}")
+        log_list.append(f"[DEBUG] JIRA Individual JQL: {jql}")
+        log_list.append(f"[DEBUG] JIRA Individual Params: {params}")
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status() 
         log_list.append(f"[INFO] JIRA API: GET {url} - Status: {response.status_code}")
@@ -443,6 +467,7 @@ def fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id
 
     issues = response.json().get("issues", [])
     log_list.append(f"[INFO] Fetched {len(issues)} issues for individual developer '{developer_name}' in sprint '{sprint_id}'.")
+    log_list.append(f"[DEBUG] Individual Issues: {[issue.get('key') for issue in issues[:5]]}...")  # Show first 5 issue keys
     if not issues:
         log_list.append("[WARNING] JIRA: No issues found for the specified individual developer/team/sprint combination.")
         return {"error": "No issues found for individual developer/team/sprint.", "dev_branches": []}
@@ -463,7 +488,7 @@ def fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id
             log_list.append(f"[WARNING] JIRA: Developer '{developer_name}' not found in JIRA.")
             return {"error": f"Developer '{developer_name}' not found in JIRA.", "dev_branches": []}
     
-        log_list.append(f"[INFO] JIRA API: GET {url} - Status: {response.status_code} - Account Id: {developer_account_id}")
+        # log_list.append(f"[INFO] JIRA API: GET {url} - Status: {response.status_code} - Account Id: {developer_account_id}")
     except requests.exceptions.RequestException as e:
         log_list.append(f"[ERROR] JIRA API Request Error: {e}")
         return {"error": f"JIRA API failed: {e}"}
@@ -477,7 +502,7 @@ def fetch_jira_metrics_via_api(jira_email, jira_token, developer_name, sprint_id
 # --- New: Function to fetch JIRA metrics for a Team ---
 # MODIFIED: Added 'headers' variable creation and passing to _process_jira_issues
 def fetch_jira_metrics_for_team(jira_email, jira_token, team_id, team_name, sprint_id, log_list):
-    # log_list.append(f"[INFO] JIRA: Starting fetch for TEAM '{team_name}' (ID: {team_id}) in sprint '{sprint_id}'...")
+    log_list.append(f"[INFO] JIRA: Starting fetch for TEAM '{team_name}' (ID: {team_id}) in sprint '{sprint_id}'...")
     
     if not jira_email or not jira_token:
         log_list.append("[ERROR] JIRA: Credentials (email/token) not provided for team fetch.")
@@ -501,7 +526,12 @@ def fetch_jira_metrics_for_team(jira_email, jira_token, team_id, team_name, spri
     jql_parts.append("issuetype NOT IN (Sub-task, Epic)")
 
     if sprint_id:
-        jql_parts.append(f'sprint = "{team_name} {sprint_id}"') # Adjust JQL for sprint if needed (e.g., openSprints())
+        if sprint_id == "openSprints()":
+            jql_parts.append("sprint in openSprints()")
+        elif sprint_id == "startOfYear()":
+            jql_parts.append("created >= startOfYear()")
+        else:
+            jql_parts.append(f'sprint = "{team_name} {sprint_id}"')
 
     jql = " AND ".join(jql_parts)
     url = f"{JIRA_URL}/rest/api/3/search"
@@ -514,16 +544,19 @@ def fetch_jira_metrics_for_team(jira_email, jira_token, team_id, team_name, spri
     }
 
     try:
-        # log_list.append(f"[INFO] JIRA Team API: GET {url} \n Headers: {headers} \n Params: {params}")
+        log_list.append(f"[INFO] JIRA Team API: GET {url}")
+        log_list.append(f"[DEBUG] JIRA Team JQL: {jql}")
+        log_list.append(f"[DEBUG] JIRA Team Params: {params}")
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status() 
-        # log_list.append(f"[INFO] JIRA API: GET {url} - Status: {response.status_code}")
+        log_list.append(f"[INFO] JIRA Team API: Status: {response.status_code}")
     except requests.exceptions.RequestException as e:
         log_list.append(f"[ERROR] JIRA Team API Request Error: {e}")
         return {"error": f"JIRA Team API failed: {e}"}
 
     issues = response.json().get("issues", [])
     log_list.append(f"[INFO] Fetched {len(issues)} issues for team '{team_name}' in sprint '{sprint_id}'.")
+    log_list.append(f"[DEBUG] Team Issues: {[issue.get('key') for issue in issues[:5]]}...")  # Show first 5 issue keys
     if not issues:
         log_list.append("[WARNING] JIRA Team: No issues found for the specified team/sprint combination.")
         return {"error": "No issues found for team/sprint.", "dev_branches": []}

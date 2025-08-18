@@ -22,7 +22,8 @@ import os
 # GitHub Configuration
 GITHUB_CONFIG = {
     "org": "truxinc",
-    "token": "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"
+    # "token": "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"
+    "token": "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"
 }
 
 # SonarCloud Configuration

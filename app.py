@@ -72,7 +72,7 @@ st.markdown("""
 # Add banner
 st.markdown("""
 <div class="main-banner">
-    <h1>📊 Productivity Metrics Dashboard</h1>
+    <h1>Productivity Metrics Dashboard</h1>
     <p>Track individual and team performance across sprints with comprehensive analytics</p>
 </div>
 """, unsafe_allow_html=True)
@@ -82,7 +82,11 @@ if 'user_authenticated' not in st.session_state: st.session_state.user_authentic
 if 'data_fetched' not in st.session_state: st.session_state.data_fetched = False
 if 'log_messages' not in st.session_state: st.session_state.log_messages = []
 if 'jira_result_individual' not in st.session_state: st.session_state.jira_result_individual = {}
+if 'jira_result_team' not in st.session_state: st.session_state.jira_result_team = {}
 if 'git_metrics_individual' not in st.session_state: st.session_state.git_metrics_individual = {}
+if 'sonar_metrics_individual' not in st.session_state: st.session_state.sonar_metrics_individual = {}
+if 'git_cache' not in st.session_state: st.session_state.git_cache = {}
+if 'sonar_cache' not in st.session_state: st.session_state.sonar_cache = {}
 if 'num_previous_sprints' not in st.session_state: st.session_state.num_previous_sprints = 3
 if 'selected_developer_name' not in st.session_state: st.session_state.selected_developer_name = "--- Select a Developer ---"
 if 'selected_duration_name' not in st.session_state: st.session_state.selected_duration_name = "Current Sprint"
@@ -114,20 +118,31 @@ with st.sidebar:
         st.session_state.num_previous_sprints = num_previous_sprints
 
         st.subheader("🧑💻 Developer Selection")
-        
         if not st.session_state.all_developers_sorted:
             team_mapping = load_team_mapping()
-            developers_by_team = {}
-            for team, developers in team_mapping.items():
-                for dev in developers:
-                    if team not in developers_by_team:
-                        developers_by_team[team] = []
-                    developers_by_team[team].append(dev)
+
+            # all developers sorted by team
+            # developers_by_team = {}
+            # for team, developers in team_mapping.items():
+            #     for dev in developers:
+            #         if team not in developers_by_team:
+            #             developers_by_team[team] = []
+            #         developers_by_team[team].append(dev)
             
-            sorted_developers = []
-            for team in sorted(developers_by_team.keys()):
-                sorted_developers.extend(sorted(developers_by_team[team]))
-            st.session_state.all_developers_sorted = sorted_developers
+            # sorted_developers = []
+            # for team in sorted(developers_by_team.keys()):
+            #     sorted_developers.extend(sorted(developers_by_team[team]))
+            # st.session_state.all_developers_sorted = sorted_developers
+
+
+            # sort all developers alphabetically
+            # Collect all developers from all teams
+            all_developers = []
+            for developers in team_mapping.values():
+                all_developers.extend(developers)
+            
+            # Sort only by developer name
+            st.session_state.all_developers_sorted = sorted(all_developers, key=str.lower)
 
         if st.session_state.all_developers_sorted:
             current_dev_idx = 0
@@ -162,12 +177,12 @@ with st.sidebar:
         st.session_state.selected_duration_name = selected_duration
 
         # Team metrics checkbox
-        include_team_metrics = st.checkbox(
+        st.session_state.include_team_metrics = st.checkbox(
             "Calculate Team Metrics",
             value=st.session_state.include_team_metrics,
-            help="Include team-level metrics in addition to individual metrics"
+            help="Include team-level metrics in addition to individual metrics",
+            key="team_metrics_checkbox"
         )
-        st.session_state.include_team_metrics = include_team_metrics
 
         if st.button("🔄 Fetch Metrics", key="fetch_metrics_btn"):
             if st.session_state.selected_developer_name == "--- Select a Developer ---":
@@ -194,12 +209,22 @@ with st.sidebar:
                         st.session_state.selected_duration_name, st.session_state.log_messages
                     )
                     
+                    # For Current Sprint, get actual sprint number for display
+                    if st.session_state.selected_duration_name == "Current Sprint":
+                        from common import get_sprint_for_date
+                        today_str = date.today().strftime("%Y-%m-%d")
+                        actual_sprint, _, _ = get_sprint_for_date(today_str)
+                        display_sprint = actual_sprint
+                    else:
+                        display_sprint = sprint_name
+                    
                     # Store sprint dates in session state for header display
-                    st.session_state.current_sprint_name = sprint_name
+                    st.session_state.current_sprint_name = display_sprint
                     st.session_state.current_sprint_start = sprint_start_date
                     st.session_state.current_sprint_end = sprint_end_date
                     
                     # JIRA Metrics
+                    add_log_message(st.session_state.log_messages, "debug", f"Fetching JIRA metrics for {st.session_state.selected_developer_name} in team {developer_team}")
                     st.session_state.jira_result_individual = fetch_jira_metrics_via_api(
                         JIRA_CONFIG["email"],
                         JIRA_CONFIG["token"],
@@ -208,13 +233,15 @@ with st.sidebar:
                         developer_team,
                         st.session_state.log_messages
                     )
+                    add_log_message(st.session_state.log_messages, "debug", f"JIRA result: story_points_done={st.session_state.jira_result_individual.get('story_points_done', 0)}, all_issues_count={st.session_state.jira_result_individual.get('all_issues_count', 0)}")
                     
                     # Git Metrics - Optimized with caching and repo limiting
                     jira_repos = set()
                     if st.session_state.jira_result_individual and "dev_branches" in st.session_state.jira_result_individual:
                         jira_repos = set(st.session_state.jira_result_individual["dev_branches"])
-                        # Limit to max 5 repos for performance
-                        jira_repos = set(list(jira_repos)[:5])
+                        add_log_message(st.session_state.log_messages, "debug", f"Found {len(jira_repos)} repositories from JIRA: {jira_repos}")
+                        # Limit to max 10 repos for performance
+                        jira_repos = set(list(jira_repos)[:10])
                         full_repos = set()
                         for repo in jira_repos:
                             if "/" not in repo:
@@ -222,10 +249,13 @@ with st.sidebar:
                             else:
                                 full_repos.add(repo)
                         jira_repos = full_repos
+                        add_log_message(st.session_state.log_messages, "debug", f"Final repo list for Git: {jira_repos}")
+                    else:
+                        add_log_message(st.session_state.log_messages, "warning", "No repositories found from JIRA issues")
                     
                     # Parallel processing for Git and SonarQube metrics
-                    git_cache_key = f"{st.session_state.selected_developer_name}_{sprint_name}_{hash(frozenset(jira_repos))}"
-                    sonar_cache_key = f"sonar_{st.session_state.selected_developer_name}_{sprint_name}"
+                    git_cache_key = f"{st.session_state.selected_developer_name}_{display_sprint}_{hash(frozenset(jira_repos))}"
+                    sonar_cache_key = f"sonar_{st.session_state.selected_developer_name}_{display_sprint}"
                     
                     # Check cache first
                     git_cached = git_cache_key in st.session_state.get('git_cache', {})
@@ -245,9 +275,9 @@ with st.sidebar:
                                     GITHUB_CONFIG["token"],
                                     selected_developer_name,
                                     list(jira_repos),
-                                    [],  # Empty log list for thread safety
+                                    st.session_state.log_messages,  # Use main log list
                                     GITHUB_CONFIG["org"],
-                                    sprint_id=sprint_name
+                                    sprint_id=display_sprint  # Use actual sprint number
                                 )
                                 
                                 individual_metrics = {
@@ -288,7 +318,7 @@ with st.sidebar:
                                     SONAR_CONFIG["org"],
                                     repo_names,
                                     branch="qa",
-                                    log_list=[]
+                                    log_list=st.session_state.log_messages
                                 )
                             else:
                                 return {
@@ -303,20 +333,13 @@ with st.sidebar:
                         # Store values for thread access
                         selected_developer_name = st.session_state.selected_developer_name
                         
-                        # Execute in parallel
-                        with ThreadPoolExecutor(max_workers=2) as executor:
-                            git_future = executor.submit(fetch_git_metrics)
-                            sonar_future = executor.submit(fetch_sonar_metrics)
-                            
-                            # Get results
-                            st.session_state.git_metrics_individual = git_future.result()
-                            st.session_state.sonar_metrics_individual = sonar_future.result()
+                        # Execute sequentially to avoid thread issues with logging
+                        add_log_message(st.session_state.log_messages, "info", "Fetching Git metrics...")
+                        st.session_state.git_metrics_individual = fetch_git_metrics()
+                        add_log_message(st.session_state.log_messages, "info", "Fetching SonarQube metrics...")
+                        st.session_state.sonar_metrics_individual = fetch_sonar_metrics()
                         
                         # Cache results
-                        if 'git_cache' not in st.session_state:
-                            st.session_state.git_cache = {}
-                        if 'sonar_cache' not in st.session_state:
-                            st.session_state.sonar_cache = {}
                         
                         if not git_cached:
                             st.session_state.git_cache[git_cache_key] = st.session_state.git_metrics_individual
@@ -327,7 +350,28 @@ with st.sidebar:
                     
                     # Fetch team metrics if enabled
                     if st.session_state.include_team_metrics:
-                        add_log_message(st.session_state.log_messages, "info", "Team metrics comparison enabled")
+                        add_log_message(st.session_state.log_messages, "info", "Team metrics comparison enabled - fetching actual team data")
+                        from utils.jira_parser import fetch_jira_metrics_for_team
+                        from config import TEAMS_DATA
+                        
+                        # Get team ID for actual team metrics
+                        team_id = TEAMS_DATA.get(developer_team)
+                        if team_id:
+                            add_log_message(st.session_state.log_messages, "debug", f"Fetching team metrics for {developer_team} (ID: {team_id})")
+                            st.session_state.jira_result_team = fetch_jira_metrics_for_team(
+                                JIRA_CONFIG["email"],
+                                JIRA_CONFIG["token"],
+                                team_id,
+                                developer_team,
+                                sprint_name,
+                                st.session_state.log_messages
+                            )
+                            add_log_message(st.session_state.log_messages, "debug", f"Team JIRA result: {st.session_state.jira_result_team}")
+                        else:
+                            add_log_message(st.session_state.log_messages, "warning", f"No team ID found for {developer_team}")
+                            st.session_state.jira_result_team = {}
+                    else:
+                        st.session_state.jira_result_team = {}
                     
                     end_time = datetime.now()
                     duration = (end_time - start_time).total_seconds()
@@ -342,7 +386,17 @@ if st.session_state.user_authenticated:
         header_col1, header_col2 = st.columns([2, 1])
         
         with header_col1:
-            st.header(f"Productivity Metrics for {st.session_state.selected_developer_name}")
+            if st.session_state.include_team_metrics:
+                # Get team name for the selected developer
+                team_mapping = load_team_mapping()
+                developer_team = "Unknown"
+                for team, developers in team_mapping.items():
+                    if st.session_state.selected_developer_name in developers:
+                        developer_team = team
+                        break
+                st.header(f"Productivity Metrics for {st.session_state.selected_developer_name} ({developer_team} Team)")
+            else:
+                st.header(f"Productivity Metrics for {st.session_state.selected_developer_name}")
         
         with header_col2:
             if hasattr(st.session_state, 'current_sprint_name') and st.session_state.current_sprint_name:
@@ -355,16 +409,28 @@ if st.session_state.user_authenticated:
         git_data = st.session_state.git_metrics_individual
         
         # Summary Cards with team comparison if enabled
-        st.markdown("### 📊 Key Performance Indicators")
+        if st.session_state.include_team_metrics:
+            st.markdown("### 📊 Key Performance Indicators (Individual / Team)")
+        else:
+            st.markdown("### 📊 Key Performance Indicators")
         
         if st.session_state.include_team_metrics:
             # Show individual/team comparison
             col1, col2, col3, col4, col5 = st.columns(5)
             
-            # Mock team totals (replace with actual team API calls)
-            team_issues_assigned = jira_data.get("all_issues_count", 0) * 5
-            team_issues_completed = (jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0)) * 4
-            team_story_points = jira_data.get("story_points_done", 0) * 6
+            # Use actual team data if available
+            team_data = st.session_state.get('jira_result_team', {})
+            if team_data:
+                team_issues_assigned = team_data.get("all_issues_count", 0)
+                team_issues_completed = team_data.get("tickets_closed", 0) + team_data.get("bugs_closed", 0)
+                team_story_points = team_data.get("story_points_done", 0)
+                add_log_message(st.session_state.log_messages, "debug", f"Using actual team data: {team_story_points} story points")
+            else:
+                # Fallback to mock data
+                team_issues_assigned = jira_data.get("all_issues_count", 0) * 5
+                team_issues_completed = (jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0)) * 4
+                team_story_points = jira_data.get("story_points_done", 0) * 6
+                add_log_message(st.session_state.log_messages, "debug", f"Using mock team data: {team_story_points} story points")
             individual_commits = git_data.get("individual_work", {}).get("commits", 0)
             team_commits = individual_commits * 8
             sonar_data = st.session_state.get('sonar_metrics_individual', {})
@@ -379,11 +445,12 @@ if st.session_state.user_authenticated:
                 st.metric("Issues Completed", f"{individual_val} / {team_issues_completed}")
             with col3:
                 individual_val = jira_data.get("story_points_done", 0)
+                add_log_message(st.session_state.log_messages, "debug", f"Displaying story points: {individual_val} / {team_story_points}")
                 st.metric("Story Points", f"{individual_val} / {team_story_points}")
             with col4:
-                st.metric("Individual Commits", f"{individual_commits} / {team_commits}")
+                st.metric("Commits", f"{individual_commits} / {team_commits}")
             with col5:
-                st.metric("New Code Issues", f"{new_issues} / {team_code_issues}")
+                st.metric("Code Issues", f"{new_issues} / {team_code_issues}")
         else:
             # Show individual metrics only
             col1, col2, col3, col4, col5 = st.columns(5)
@@ -392,7 +459,9 @@ if st.session_state.user_authenticated:
             with col2:
                 st.metric("Issues Completed", jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0))
             with col3:
-                st.metric("Story Points", jira_data.get("story_points_done", 0))
+                individual_val = jira_data.get("story_points_done", 0)
+                add_log_message(st.session_state.log_messages, "debug", f"Displaying individual story points: {individual_val}")
+                st.metric("Story Points", individual_val)
             with col4:
                 individual_commits = git_data.get("individual_work", {}).get("commits", 0)
                 st.metric("Individual Commits", individual_commits)
@@ -411,28 +480,55 @@ if st.session_state.user_authenticated:
         with col1:
             st.subheader("🎯 JIRA Metrics")
             if jira_data and not jira_data.get("error"):
-                jira_df = pd.DataFrame([{
-                    "Metric": "Issues Assigned",
-                    "Value": jira_data.get("all_issues_count", 0)
-                }, {
-                    "Metric": "Issues Completed",
-                    "Value": jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0)
-                }, {
-                    "Metric": "Story Points",
-                    "Value": jira_data.get("story_points_done", 0)
-                }, {
-                    "Metric": "Bugs Fixed",
-                    "Value": jira_data.get("bugs_closed", 0)
-                }, {
-                    "Metric": "Avg Lead Time (days)",
-                    "Value": jira_data.get("avg_lead_time", "N/A")
-                }, {
-                    "Metric": "Avg Cycle Time (days)",
-                    "Value": jira_data.get("avg_cycle_time", "N/A")
-                }, {
-                    "Metric": "Failed QA Count",
-                    "Value": jira_data.get("failed_qa_count", 0)
-                }])
+                if st.session_state.include_team_metrics:
+                    # Team comparison format using actual team data
+                    team_data = st.session_state.get('jira_result_team', {})
+                    jira_df = pd.DataFrame([{
+                        "Metric": "Issues Assigned",
+                        "Value": f"{jira_data.get('all_issues_count', 0)} / {team_data.get('all_issues_count', 0) if team_data else 'N/A'}"
+                    }, {
+                        "Metric": "Issues Completed",
+                        "Value": f"{jira_data.get('tickets_closed', 0) + jira_data.get('bugs_closed', 0)} / {team_data.get('tickets_closed', 0) + team_data.get('bugs_closed', 0) if team_data else 'N/A'}"
+                    }, {
+                        "Metric": "Story Points",
+                        "Value": f"{jira_data.get('story_points_done', 0)} / {team_data.get('story_points_done', 0) if team_data else 'N/A'}"
+                    }, {
+                        "Metric": "Bugs Fixed",
+                        "Value": f"{jira_data.get('bugs_closed', 0)} / {team_data.get('bugs_closed', 0) if team_data else 'N/A'}"
+                    }, {
+                        "Metric": "Avg Lead Time (days)",
+                        "Value": f"{jira_data.get('avg_lead_time', 'N/A')} / {team_data.get('avg_lead_time', 'N/A') if team_data else 'N/A'}"
+                    }, {
+                        "Metric": "Avg Cycle Time (days)",
+                        "Value": f"{jira_data.get('avg_cycle_time', 'N/A')} / {team_data.get('avg_cycle_time', 'N/A') if team_data else 'N/A'}"
+                    }, {
+                        "Metric": "Failed QA Count",
+                        "Value": f"{jira_data.get('failed_qa_count', 0)} / {team_data.get('failed_qa_count', 0) if team_data else 'N/A'}"
+                    }])
+                else:
+                    # Individual format - convert all to strings to avoid PyArrow issues
+                    jira_df = pd.DataFrame([{
+                        "Metric": "Issues Assigned",
+                        "Value": str(jira_data.get("all_issues_count", 0))
+                    }, {
+                        "Metric": "Issues Completed",
+                        "Value": str(jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0))
+                    }, {
+                        "Metric": "Story Points",
+                        "Value": str(jira_data.get("story_points_done", 0))
+                    }, {
+                        "Metric": "Bugs Fixed",
+                        "Value": str(jira_data.get("bugs_closed", 0))
+                    }, {
+                        "Metric": "Avg Lead Time (days)",
+                        "Value": str(jira_data.get("avg_lead_time", "N/A"))
+                    }, {
+                        "Metric": "Avg Cycle Time (days)",
+                        "Value": str(jira_data.get("avg_cycle_time", "N/A"))
+                    }, {
+                        "Metric": "Failed QA Count",
+                        "Value": str(jira_data.get("failed_qa_count", 0))
+                    }])
                 st.dataframe(jira_df, hide_index=True, use_container_width=True)
             else:
                 st.error("Failed to fetch JIRA metrics")
@@ -442,37 +538,70 @@ if st.session_state.user_authenticated:
             if git_data and not git_data.get("error"):
                 individual_work = git_data.get("individual_work", {})
                 
-                git_df = pd.DataFrame([{
-                    "Metric": "Commits (Authored)",
-                    "Value": individual_work.get("commits", 0)
-                }, {
-                    "Metric": "Lines Added",
-                    "Value": individual_work.get("lines_added", 0)
-                }, {
-                    "Metric": "Lines Deleted",
-                    "Value": individual_work.get("lines_deleted", 0)
-                }, {
-                    "Metric": "Files Changed",
-                    "Value": individual_work.get("files_changed", 0)
-                }, {
-                    "Metric": "PRs Created",
-                    "Value": individual_work.get("prs_created", 0)
-                }, {
-                    "Metric": "PRs Merged",
-                    "Value": individual_work.get("prs_merged", 0)
-                }])
+                if st.session_state.include_team_metrics:
+                    # Team comparison format
+                    team_multiplier = 8  # Mock team size for git metrics
+                    git_df = pd.DataFrame([{
+                        "Metric": "Commits (Authored)",
+                        "Value": f"{individual_work.get('commits', 0)} / {individual_work.get('commits', 0) * team_multiplier}"
+                    }, {
+                        "Metric": "Lines Added",
+                        "Value": f"{individual_work.get('lines_added', 0)} / {individual_work.get('lines_added', 0) * team_multiplier}"
+                    }, {
+                        "Metric": "Lines Deleted",
+                        "Value": f"{individual_work.get('lines_deleted', 0)} / {individual_work.get('lines_deleted', 0) * team_multiplier}"
+                    }, {
+                        "Metric": "Files Changed",
+                        "Value": f"{individual_work.get('files_changed', 0)} / {individual_work.get('files_changed', 0) * team_multiplier}"
+                    }, {
+                        "Metric": "PRs Created",
+                        "Value": f"{individual_work.get('prs_created', 0)} / {individual_work.get('prs_created', 0) * team_multiplier}"
+                    }, {
+                        "Metric": "PRs Merged",
+                        "Value": f"{individual_work.get('prs_merged', 0)} / {individual_work.get('prs_merged', 0) * team_multiplier}"
+                    }])
+                else:
+                    # Individual format - convert all to strings
+                    git_df = pd.DataFrame([{
+                        "Metric": "Commits (Authored)",
+                        "Value": str(individual_work.get("commits", 0))
+                    }, {
+                        "Metric": "Lines Added",
+                        "Value": str(individual_work.get("lines_added", 0))
+                    }, {
+                        "Metric": "Lines Deleted",
+                        "Value": str(individual_work.get("lines_deleted", 0))
+                    }, {
+                        "Metric": "Files Changed",
+                        "Value": str(individual_work.get("files_changed", 0))
+                    }, {
+                        "Metric": "PRs Created",
+                        "Value": str(individual_work.get("prs_created", 0))
+                    }, {
+                        "Metric": "PRs Merged",
+                        "Value": str(individual_work.get("prs_merged", 0))
+                    }])
                 st.dataframe(git_df, hide_index=True, use_container_width=True)
                 
                 # Managerial work section
                 st.subheader("👥 Code Review Work")
                 managerial_work = git_data.get("managerial_work", {})
-                mgmt_df = pd.DataFrame([{
-                    "Metric": "Code Reviews Given",
-                    "Value": managerial_work.get("code_reviews", 0)
-                }, {
-                    "Metric": "PRs Approved",
-                    "Value": managerial_work.get("prs_approved", 0)
-                }])
+                if st.session_state.include_team_metrics:
+                    mgmt_df = pd.DataFrame([{
+                        "Metric": "Code Reviews Given",
+                        "Value": f"{managerial_work.get('code_reviews', 0)} / {managerial_work.get('code_reviews', 0) * 5}"
+                    }, {
+                        "Metric": "PRs Approved",
+                        "Value": f"{managerial_work.get('prs_approved', 0)} / {managerial_work.get('prs_approved', 0) * 5}"
+                    }])
+                else:
+                    mgmt_df = pd.DataFrame([{
+                        "Metric": "Code Reviews Given",
+                        "Value": str(managerial_work.get("code_reviews", 0))
+                    }, {
+                        "Metric": "PRs Approved",
+                        "Value": str(managerial_work.get("prs_approved", 0))
+                    }])
                 st.dataframe(mgmt_df, hide_index=True, use_container_width=True)
             else:
                 st.error("Failed to fetch Git metrics")
@@ -502,38 +631,74 @@ if st.session_state.user_authenticated:
                             st.info("No SonarQube data available for this repository")
                         else:
                             # Create quality comparison table
-                            quality_data = [
-                                {
-                                    "Category": "Bugs",
-                                    "New Code": new_code_metrics.get("new_bugs", 0),
-                                    "Overall": overall_metrics.get("bugs", "N/A")
-                                },
-                                {
-                                    "Category": "Vulnerabilities",
-                                    "New Code": new_code_metrics.get("new_vulnerabilities", 0),
-                                    "Overall": overall_metrics.get("vulnerabilities", "N/A")
-                                },
-                                {
-                                    "Category": "Code Smells",
-                                    "New Code": new_code_metrics.get("new_code_smells", 0),
-                                    "Overall": overall_metrics.get("code_smells", "N/A")
-                                },
-                                {
-                                    "Category": "Security Hotspots",
-                                    "New Code": new_code_metrics.get("new_security_hotspots", 0),
-                                    "Overall": "N/A"
-                                },
-                                {
-                                    "Category": "Coverage",
-                                    "New Code": new_code_metrics.get("new_coverage", "N/A"),
-                                    "Overall": f"{overall_metrics.get('coverage', 0)}%" if overall_metrics.get('coverage') != "N/A" else "N/A"
-                                },
-                                {
-                                    "Category": "Duplication",
-                                    "New Code": new_code_metrics.get("new_duplicated_lines_density", "N/A"),
-                                    "Overall": f"{overall_metrics.get('duplicated_lines_density', 0)}%" if overall_metrics.get('duplicated_lines_density') != "N/A" else "N/A"
-                                }
-                            ]
+                            if st.session_state.include_team_metrics:
+                                # Team comparison format
+                                quality_data = [
+                                    {
+                                        "Category": "Bugs",
+                                        "New Code": f"{new_code_metrics.get('new_bugs', 0)} / {new_code_metrics.get('new_bugs', 0) * 3}",
+                                        "Overall": f"{overall_metrics.get('bugs', 'N/A')} / {overall_metrics.get('bugs', 'N/A') if overall_metrics.get('bugs') != 'N/A' else 'N/A'}"
+                                    },
+                                    {
+                                        "Category": "Vulnerabilities",
+                                        "New Code": f"{new_code_metrics.get('new_vulnerabilities', 0)} / {new_code_metrics.get('new_vulnerabilities', 0) * 2}",
+                                        "Overall": f"{overall_metrics.get('vulnerabilities', 'N/A')} / {overall_metrics.get('vulnerabilities', 'N/A') if overall_metrics.get('vulnerabilities') != 'N/A' else 'N/A'}"
+                                    },
+                                    {
+                                        "Category": "Code Smells",
+                                        "New Code": f"{new_code_metrics.get('new_code_smells', 0)} / {new_code_metrics.get('new_code_smells', 0) * 4}",
+                                        "Overall": f"{overall_metrics.get('code_smells', 'N/A')} / {overall_metrics.get('code_smells', 'N/A') if overall_metrics.get('code_smells') != 'N/A' else 'N/A'}"
+                                    },
+                                    {
+                                        "Category": "Security Hotspots",
+                                        "New Code": f"{new_code_metrics.get('new_security_hotspots', 0)} / {new_code_metrics.get('new_security_hotspots', 0) * 2}",
+                                        "Overall": "N/A / N/A"
+                                    },
+                                    {
+                                        "Category": "Coverage",
+                                        "New Code": f"{new_code_metrics.get('new_coverage', 'N/A')} / {new_code_metrics.get('new_coverage', 'N/A')}",
+                                        "Overall": f"{overall_metrics.get('coverage', 0)}% / {overall_metrics.get('coverage', 0)}%" if overall_metrics.get('coverage') != "N/A" else "N/A / N/A"
+                                    },
+                                    {
+                                        "Category": "Duplication",
+                                        "New Code": f"{new_code_metrics.get('new_duplicated_lines_density', 'N/A')} / {new_code_metrics.get('new_duplicated_lines_density', 'N/A')}",
+                                        "Overall": f"{overall_metrics.get('duplicated_lines_density', 0)}% / {overall_metrics.get('duplicated_lines_density', 0)}%" if overall_metrics.get('duplicated_lines_density') != "N/A" else "N/A / N/A"
+                                    }
+                                ]
+                            else:
+                                # Individual format
+                                quality_data = [
+                                    {
+                                        "Category": "Bugs",
+                                        "New Code": new_code_metrics.get("new_bugs", 0),
+                                        "Overall": overall_metrics.get("bugs", "N/A")
+                                    },
+                                    {
+                                        "Category": "Vulnerabilities",
+                                        "New Code": new_code_metrics.get("new_vulnerabilities", 0),
+                                        "Overall": overall_metrics.get("vulnerabilities", "N/A")
+                                    },
+                                    {
+                                        "Category": "Code Smells",
+                                        "New Code": new_code_metrics.get("new_code_smells", 0),
+                                        "Overall": overall_metrics.get("code_smells", "N/A")
+                                    },
+                                    {
+                                        "Category": "Security Hotspots",
+                                        "New Code": new_code_metrics.get("new_security_hotspots", 0),
+                                        "Overall": "N/A"
+                                    },
+                                    {
+                                        "Category": "Coverage",
+                                        "New Code": new_code_metrics.get("new_coverage", "N/A"),
+                                        "Overall": f"{overall_metrics.get('coverage', 0)}%" if overall_metrics.get('coverage') != "N/A" else "N/A"
+                                    },
+                                    {
+                                        "Category": "Duplication",
+                                        "New Code": new_code_metrics.get("new_duplicated_lines_density", "N/A"),
+                                        "Overall": f"{overall_metrics.get('duplicated_lines_density', 0)}%" if overall_metrics.get('duplicated_lines_density') != "N/A" else "N/A"
+                                    }
+                                ]
                             
                             quality_df = pd.DataFrame(quality_data)
                             st.dataframe(quality_df, hide_index=True, use_container_width=True)
@@ -603,14 +768,25 @@ if st.session_state.user_authenticated:
                         planned_issues = jira_data.get("all_issues_count", 0)
                         delivered_issues = jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0)
                         
+                        # Team data if available
+                        team_data = st.session_state.get('jira_result_team', {})
+                        team_planned = team_data.get("all_issues_count", planned_issues * 5) if st.session_state.include_team_metrics else 0
+                        team_delivered = (team_data.get("tickets_closed", 0) + team_data.get("bugs_closed", 0)) if st.session_state.include_team_metrics else delivered_issues * 4
+                        team_sp_planned = team_data.get("story_points_done", current_story_points * 6) if st.session_state.include_team_metrics else 0
+                        team_sp_delivered = team_data.get("story_points_done", current_story_points * 6) if st.session_state.include_team_metrics else 0
+                        
                         sprint_performance.append({
                             "Sprint": str(sprint),
                             "Planned Issues": planned_issues,
                             "Delivered Issues": delivered_issues,
                             "Completion Rate": current_completion_rate,
                             "Failed QA Count": current_failed_qa,
-                            "Planned Story Points": planned_issues * 3,  # Estimate
-                            "Delivered Story Points": current_story_points
+                            "Planned Story Points": planned_issues * 3,
+                            "Delivered Story Points": current_story_points,
+                            "Team Planned Issues": team_planned,
+                            "Team Delivered Issues": team_delivered,
+                            "Team Planned SP": team_sp_planned,
+                            "Team Delivered SP": team_sp_delivered
                         })
                     else:
                         # Simulate data for other sprints (replace with actual API calls)
@@ -621,6 +797,12 @@ if st.session_state.user_authenticated:
                         planned_sp = planned_issues * 3
                         delivered_sp = max(0, planned_sp - (i*2))
                         
+                        # Mock team data
+                        team_planned = planned_issues * 5 if st.session_state.include_team_metrics else 0
+                        team_delivered = delivered_issues * 4 if st.session_state.include_team_metrics else 0
+                        team_sp_planned = planned_sp * 6 if st.session_state.include_team_metrics else 0
+                        team_sp_delivered = delivered_sp * 5 if st.session_state.include_team_metrics else 0
+                        
                         sprint_performance.append({
                             "Sprint": str(sprint),
                             "Planned Issues": planned_issues,
@@ -628,7 +810,11 @@ if st.session_state.user_authenticated:
                             "Completion Rate": completion_rate,
                             "Failed QA Count": failed_qa,
                             "Planned Story Points": planned_sp,
-                            "Delivered Story Points": delivered_sp
+                            "Delivered Story Points": delivered_sp,
+                            "Team Planned Issues": team_planned,
+                            "Team Delivered Issues": team_delivered,
+                            "Team Planned SP": team_sp_planned,
+                            "Team Delivered SP": team_sp_delivered
                         })
                 
                 if sprint_performance:
@@ -650,52 +836,136 @@ if st.session_state.user_authenticated:
                     # Completion Rate
                     fig.add_trace(
                         go.Scatter(x=sprints, y=[item["Completion Rate"] for item in sprint_performance_charts],
-                                mode='lines+markers+text', name='Completion Rate', line=dict(color='green'),
+                                mode='lines+markers+text', name='Individual Completion Rate', line=dict(color='green'),
                                 text=[f"{item['Completion Rate']:.1f}%" for item in sprint_performance_charts],
                                 textposition="top center"),
                         row=1, col=1
                     )
                     
+                    if st.session_state.include_team_metrics:
+                        team_completion_rates = [((item["Team Delivered Issues"] / max(item["Team Planned Issues"], 1)) * 100) for item in sprint_performance_charts]
+                        fig.add_trace(
+                            go.Scatter(x=sprints, y=team_completion_rates,
+                                    mode='lines+markers+text', name='Team Completion Rate', line=dict(color='orange'),
+                                    text=[f"{rate:.1f}%" for rate in team_completion_rates],
+                                    textposition="bottom center"),
+                            row=1, col=1
+                        )
+                    
                     # Failed QA Count
                     fig.add_trace(
                         go.Scatter(x=sprints, y=[item["Failed QA Count"] for item in sprint_performance_charts],
-                                mode='lines+markers+text', name='Failed QA Count', line=dict(color='red'),
+                                mode='lines+markers+text', name='Individual Failed QA', line=dict(color='red'),
                                 text=[str(item["Failed QA Count"]) for item in sprint_performance_charts],
                                 textposition="top center"),
                         row=1, col=2
                     )
                     
+                    if st.session_state.include_team_metrics:
+                        team_failed_qa = [item["Failed QA Count"] * 2 for item in sprint_performance_charts]
+                        fig.add_trace(
+                            go.Scatter(x=sprints, y=team_failed_qa,
+                                    mode='lines+markers+text', name='Team Failed QA', line=dict(color='darkred'),
+                                    text=[str(count) for count in team_failed_qa],
+                                    textposition="bottom center"),
+                            row=1, col=2
+                        )
+                    
                     # Issues: Planned vs Delivered
-                    fig.add_trace(
-                        go.Bar(x=sprints, y=[item["Planned Issues"] for item in sprint_performance_charts],
-                            name='Planned Issues', marker_color='lightblue', opacity=0.7,
-                            text=[str(item["Planned Issues"]) for item in sprint_performance_charts],
-                            textposition='outside'),
-                        row=2, col=1
-                    )
-                    fig.add_trace(
-                        go.Bar(x=sprints, y=[item["Delivered Issues"] for item in sprint_performance_charts],
-                            name='Delivered Issues', marker_color='darkblue',
-                            text=[str(item["Delivered Issues"]) for item in sprint_performance_charts],
-                            textposition='outside'),
-                        row=2, col=1
-                    )
+                    if st.session_state.include_team_metrics:
+                        # Individual bars
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Planned Issues"] for item in sprint_performance_charts],
+                                name='Individual Planned', marker_color='lightblue', opacity=0.7,
+                                text=[str(item["Planned Issues"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=1
+                        )
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Delivered Issues"] for item in sprint_performance_charts],
+                                name='Individual Delivered', marker_color='darkblue',
+                                text=[str(item["Delivered Issues"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=1
+                        )
+                        # Team bars
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Team Planned Issues"] for item in sprint_performance_charts],
+                                name='Team Planned', marker_color='mediumpurple', opacity=0.7,
+                                text=[str(item["Team Planned Issues"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=1
+                        )
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Team Delivered Issues"] for item in sprint_performance_charts],
+                                name='Team Delivered', marker_color='darkviolet',
+                                text=[str(item["Team Delivered Issues"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=1
+                        )
+                    else:
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Planned Issues"] for item in sprint_performance_charts],
+                                name='Planned Issues', marker_color='lightblue', opacity=0.7,
+                                text=[str(item["Planned Issues"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=1
+                        )
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Delivered Issues"] for item in sprint_performance_charts],
+                                name='Delivered Issues', marker_color='darkblue',
+                                text=[str(item["Delivered Issues"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=1
+                        )
                     
                     # Story Points: Planned vs Delivered
-                    fig.add_trace(
-                        go.Bar(x=sprints, y=[item["Planned Story Points"] for item in sprint_performance_charts],
-                            name='Planned SP', marker_color='lightgreen', opacity=0.7,
-                            text=[str(item["Planned Story Points"]) for item in sprint_performance_charts],
-                            textposition='outside'),
-                        row=2, col=2
-                    )
-                    fig.add_trace(
-                        go.Bar(x=sprints, y=[item["Delivered Story Points"] for item in sprint_performance_charts],
-                            name='Delivered SP', marker_color='darkgreen',
-                            text=[str(item["Delivered Story Points"]) for item in sprint_performance_charts],
-                            textposition='outside'),
-                        row=2, col=2
-                    )
+                    if st.session_state.include_team_metrics:
+                        # Individual SP bars
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Planned Story Points"] for item in sprint_performance_charts],
+                                name='Individual Planned SP', marker_color='lightgreen', opacity=0.7,
+                                text=[str(item["Planned Story Points"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=2
+                        )
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Delivered Story Points"] for item in sprint_performance_charts],
+                                name='Individual Delivered SP', marker_color='darkgreen',
+                                text=[str(item["Delivered Story Points"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=2
+                        )
+                        # Team SP bars
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Team Planned SP"] for item in sprint_performance_charts],
+                                name='Team Planned SP', marker_color='lightsalmon', opacity=0.8,
+                                text=[str(item["Team Planned SP"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=2
+                        )
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Team Delivered SP"] for item in sprint_performance_charts],
+                                name='Team Delivered SP', marker_color='darkorange',
+                                text=[str(item["Team Delivered SP"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=2
+                        )
+                    else:
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Planned Story Points"] for item in sprint_performance_charts],
+                                name='Planned SP', marker_color='lightgreen', opacity=0.7,
+                                text=[str(item["Planned Story Points"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=2
+                        )
+                        fig.add_trace(
+                            go.Bar(x=sprints, y=[item["Delivered Story Points"] for item in sprint_performance_charts],
+                                name='Delivered SP', marker_color='darkgreen',
+                                text=[str(item["Delivered Story Points"]) for item in sprint_performance_charts],
+                                textposition='outside'),
+                            row=2, col=2
+                        )
                     
                     # Update x-axis formatting for all subplots - treat as categorical
                     fig.update_xaxes(tickangle=45, type='category', row=1, col=1)
@@ -703,16 +973,28 @@ if st.session_state.user_authenticated:
                     fig.update_xaxes(tickangle=45, type='category', row=2, col=1)
                     fig.update_xaxes(tickangle=45, type='category', row=2, col=2)
                     
-                    # Adjust Y-axis ranges to accommodate data labels
+                    # Auto-adjust Y-axis ranges based on data
                     completion_rates = [item["Completion Rate"] for item in sprint_performance_charts]
                     failed_qa_counts = [item["Failed QA Count"] for item in sprint_performance_charts]
-                    planned_issues = [item["Planned Issues"] for item in sprint_performance_charts]
-                    planned_sp = [item["Planned Story Points"] for item in sprint_performance_charts]
                     
-                    fig.update_yaxes(range=[0, max(completion_rates) * 1.15], row=1, col=1)
-                    fig.update_yaxes(range=[0, max(failed_qa_counts) * 1.3], row=1, col=2)
-                    fig.update_yaxes(range=[0, max(planned_issues) * 1.2], row=2, col=1)
-                    fig.update_yaxes(range=[0, max(planned_sp) * 1.2], row=2, col=2)
+                    if st.session_state.include_team_metrics:
+                        team_completion_rates = [((item["Team Delivered Issues"] / max(item["Team Planned Issues"], 1)) * 100) for item in sprint_performance_charts]
+                        team_failed_qa = [item["Failed QA Count"] * 3 for item in sprint_performance_charts]
+                        max_completion = max(max(completion_rates), max(team_completion_rates))
+                        max_failed_qa = max(max(failed_qa_counts), max(team_failed_qa))
+                        
+                        all_issues = [item["Planned Issues"] for item in sprint_performance_charts] + [item["Team Planned Issues"] for item in sprint_performance_charts] + [item["Delivered Issues"] for item in sprint_performance_charts] + [item["Team Delivered Issues"] for item in sprint_performance_charts]
+                        all_sp = [item["Planned Story Points"] for item in sprint_performance_charts] + [item["Team Planned SP"] for item in sprint_performance_charts] + [item["Delivered Story Points"] for item in sprint_performance_charts] + [item["Team Delivered SP"] for item in sprint_performance_charts]
+                    else:
+                        max_completion = max(completion_rates)
+                        max_failed_qa = max(failed_qa_counts)
+                        all_issues = [item["Planned Issues"] for item in sprint_performance_charts] + [item["Delivered Issues"] for item in sprint_performance_charts]
+                        all_sp = [item["Planned Story Points"] for item in sprint_performance_charts] + [item["Delivered Story Points"] for item in sprint_performance_charts]
+                    
+                    fig.update_yaxes(range=[0, max_completion * 1.15], row=1, col=1)
+                    fig.update_yaxes(range=[0, max_failed_qa * 1.3], row=1, col=2)
+                    fig.update_yaxes(range=[0, max(all_issues) * 1.2], row=2, col=1)
+                    fig.update_yaxes(range=[0, max(all_sp) * 1.2], row=2, col=2)
                     
                     fig.update_layout(height=600, showlegend=False, title_text="Performance Trends")
                     st.plotly_chart(fig, use_container_width=True)
@@ -828,7 +1110,16 @@ if st.session_state.user_authenticated:
                 if sprint_performance:
                     # Performance summary table (descending order - newest first)
                     perf_df = pd.DataFrame(sprint_performance)
-                    perf_df['Completion Rate'] = perf_df['Completion Rate'].apply(lambda x: f"{x:.1f}%")
+                    
+                    if st.session_state.include_team_metrics:
+                        # Add team comparison columns
+                        perf_df['Planned Issues'] = perf_df['Planned Issues'].apply(lambda x: f"{x} / {x * 5}")
+                        perf_df['Delivered Issues'] = perf_df['Delivered Issues'].apply(lambda x: f"{x} / {x * 4}")
+                        perf_df['Planned Story Points'] = perf_df['Planned Story Points'].apply(lambda x: f"{x} / {x * 6}")
+                        perf_df['Delivered Story Points'] = perf_df['Delivered Story Points'].apply(lambda x: f"{x} / {x * 5}")
+                        perf_df['Failed QA Count'] = perf_df['Failed QA Count'].apply(lambda x: f"{x} / {x * 2}")
+                    
+                    perf_df['Completion Rate'] = perf_df['Completion Rate'].apply(lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) else x)
                     st.dataframe(perf_df, hide_index=True, use_container_width=True)
                 else:
                     st.info("No sprint performance data available")
@@ -836,43 +1127,43 @@ if st.session_state.user_authenticated:
         
         
         # Team metrics if enabled
-        if st.session_state.include_team_metrics:
-            st.subheader("👥 Individual vs Team Comparison")
+        # if st.session_state.include_team_metrics:
+        #     st.subheader("👥 Individual vs Team Comparison")
             
-            # Mock team data (replace with actual team metrics API calls)
-            team_data = {
-                "all_issues_count": jira_data.get("all_issues_count", 0) * 5,  # Team has 5x issues
-                "tickets_closed": (jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0)) * 4,
-                "story_points_done": jira_data.get("story_points_done", 0) * 6,
-                "commits": individual_commits * 8,
-                "new_code_issues": new_issues * 3
-            }
+        #     # Mock team data (replace with actual team metrics API calls)
+        #     team_data = {
+        #         "all_issues_count": jira_data.get("all_issues_count", 0) * 5,  # Team has 5x issues
+        #         "tickets_closed": (jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0)) * 4,
+        #         "story_points_done": jira_data.get("story_points_done", 0) * 6,
+        #         "commits": individual_commits * 8,
+        #         "new_code_issues": new_issues * 3
+        #     }
             
-            # Individual vs Team comparison cards
-            col1, col2, col3, col4, col5 = st.columns(5)
+        #     # Individual vs Team comparison cards
+        #     col1, col2, col3, col4, col5 = st.columns(5)
             
-            with col1:
-                individual_val = jira_data.get("all_issues_count", 0)
-                team_val = team_data["all_issues_count"]
-                st.metric("Issues Assigned", f"{individual_val} / {team_val}", help="Individual / Team")
+        #     with col1:
+        #         individual_val = jira_data.get("all_issues_count", 0)
+        #         team_val = team_data["all_issues_count"]
+        #         st.metric("Issues Assigned", f"{individual_val} / {team_val}", help="Individual / Team")
             
-            with col2:
-                individual_val = jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0)
-                team_val = team_data["tickets_closed"]
-                st.metric("Issues Completed", f"{individual_val} / {team_val}", help="Individual / Team")
+        #     with col2:
+        #         individual_val = jira_data.get("tickets_closed", 0) + jira_data.get("bugs_closed", 0)
+        #         team_val = team_data["tickets_closed"]
+        #         st.metric("Issues Completed", f"{individual_val} / {team_val}", help="Individual / Team")
             
-            with col3:
-                individual_val = jira_data.get("story_points_done", 0)
-                team_val = team_data["story_points_done"]
-                st.metric("Story Points", f"{individual_val} / {team_val}", help="Individual / Team")
+        #     with col3:
+        #         individual_val = jira_data.get("story_points_done", 0)
+        #         team_val = team_data["story_points_done"]
+        #         st.metric("Story Points", f"{individual_val} / {team_val}", help="Individual / Team")
             
-            with col4:
-                team_val = team_data["commits"]
-                st.metric("Commits", f"{individual_commits} / {team_val}", help="Individual / Team")
+        #     with col4:
+        #         team_val = team_data["commits"]
+        #         st.metric("Commits", f"{individual_commits} / {team_val}", help="Individual / Team")
             
-            with col5:
-                team_val = team_data["new_code_issues"]
-                st.metric("Code Issues", f"{new_issues} / {team_val}", help="Individual / Team")
+        #     with col5:
+        #         team_val = team_data["new_code_issues"]
+        #         st.metric("Code Issues", f"{new_issues} / {team_val}", help="Individual / Team")
         
         # Logs
         if st.session_state.log_messages:
