@@ -23,7 +23,8 @@ def get_sprint_dates_from_name(sprint_name, base_sprint="2025.12", base_start_da
 
     return sprint_start_date, sprint_end_date
 
-def get_previous_n_sprints(count, base_sprint="2025.12", base_start_date_str="2025-06-11", sprint_length_days=14):
+def get_current_sprint(base_sprint="2025.12", base_start_date_str="2025-06-11", sprint_length_days=14):
+    """Get current sprint name based on today's date"""
     base_year, base_sprint_num = map(int, base_sprint.split("."))
     base_start_date = datetime.strptime(base_start_date_str, "%Y-%m-%d").date()
     today = datetime.today().date()
@@ -38,6 +39,12 @@ def get_previous_n_sprints(count, base_sprint="2025.12", base_start_date_str="20
     while current_sprint_num > 52:
         current_sprint_num -= 52
         current_year += 1
+
+    return f"{current_year}.{current_sprint_num:02d}"
+
+def get_previous_n_sprints(count, base_sprint="2025.12", base_start_date_str="2025-06-11", sprint_length_days=14):
+    current_sprint = get_current_sprint(base_sprint, base_start_date_str, sprint_length_days)
+    current_year, current_sprint_num = map(int, current_sprint.split("."))
 
     # Get previous 'count' sprints
     result = []

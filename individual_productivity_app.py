@@ -173,8 +173,13 @@ with st.sidebar:
             st.session_state.selected_developer_name = selected_developer_name_widget
 
         # Duration selection similar to trux-jira-metrics
-        previous_sprints = get_previous_sprints(st.session_state.num_previous_sprints)
+        from common import get_previous_n_sprints, get_current_sprint
+        previous_sprints = get_previous_n_sprints(st.session_state.num_previous_sprints)
         detailed_durations_with_sprints = DETAILED_DURATIONS_DATA.copy()
+        
+        # Add current sprint dynamically
+        current_sprint = get_current_sprint()
+        detailed_durations_with_sprints[f"Sprint {current_sprint}"] = current_sprint
         
         for sprint in previous_sprints:
             detailed_durations_with_sprints[f"Sprint {sprint}"] = sprint
